@@ -29,3 +29,8 @@ tokio = { version = "1.47.1", features = ["full"] }
 tokio-metrics = "0.4.5"
 tokio-util = "0.7.16"
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
+ahash = { version = "0.8.12", features = ["serde"] }
+smallvec = { version = "1.15.1", features = ["serde"] }
+
+[dev-dependencies]
+criterion = "0.7.0"

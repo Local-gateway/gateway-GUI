@@ -33,5 +33,5 @@ pub use gateway::{Gateway, GatewayConfig};
 pub use registry::{Registry, RegistryEntry};
 pub use protocol::WdicProtocol;
 pub use network::NetworkManager;
-pub use udp_protocol::{UdpBroadcastManager, UdpToken, DirectoryIndex, UdpBroadcastEvent};
+pub use udp_protocol::{UdpBroadcastManager, UdpToken, DirectoryIndex, DirectoryEntry, UdpBroadcastEvent};
 pub use performance::{PerformanceMonitor, PerformanceReport, PerformanceTestSuite, BenchmarkResult};

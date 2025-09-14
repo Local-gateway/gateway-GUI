@@ -1,8 +1,10 @@
 //! 性能监控和基准测试模块
 //! 
 //! 提供全面的性能监控、内存使用分析和网络吞吐量测试功能。
+//! 性能优化版本：使用 AHashMap 和 SmallVec 减少内存分配并提升性能。
 
-use std::collections::HashMap;
+use ahash::AHashMap;
+use smallvec::SmallVec;
 use std::time::{Duration, Instant};
 use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex};
@@ -10,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use log::info;
 use anyhow::Result;
 
-/// 性能指标收集器
+/// 性能指标收集器 - 性能优化版本
 #[derive(Debug)]
 pub struct PerformanceMonitor {
     /// 系统信息
@@ -23,8 +25,8 @@ pub struct PerformanceMonitor {
     latency_metrics: Arc<RwLock<LatencyMetrics>>,
     /// 连接指标
     connection_metrics: Arc<RwLock<ConnectionMetrics>>,
-    /// 基准测试结果
-    benchmark_results: Arc<RwLock<HashMap<String, BenchmarkResult>>>,
+    /// 基准测试结果 - 使用 AHashMap 提升性能
+    benchmark_results: Arc<RwLock<AHashMap<String, BenchmarkResult>>>,
 }
 
 /// 网络性能指标
@@ -67,8 +69,8 @@ pub struct MemoryMetrics {
     pub last_update: chrono::DateTime<chrono::Utc>,
 }
 
-/// 延迟性能指标
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// 延迟性能指标 - 性能优化版本
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LatencyMetrics {
     /// 平均延迟（毫秒）
     pub average_latency: f64,
@@ -84,10 +86,26 @@ pub struct LatencyMetrics {
     pub p99_latency: f64,
     /// 延迟样本数
     pub sample_count: u64,
-    /// 延迟历史记录
-    pub latency_history: Vec<f64>,
+    /// 延迟历史记录 - 使用 SmallVec，大多数时候样本数不多
+    pub latency_history: SmallVec<[f64; 64]>,
     /// 上次统计时间
     pub last_update: chrono::DateTime<chrono::Utc>,
+}
+
+impl Default for LatencyMetrics {
+    fn default() -> Self {
+        Self {
+            average_latency: 0.0,
+            min_latency: 0.0,
+            max_latency: 0.0,
+            p50_latency: 0.0,
+            p95_latency: 0.0,
+            p99_latency: 0.0,
+            sample_count: 0,
+            latency_history: SmallVec::new(),
+            last_update: chrono::Utc::now(),
+        }
+    }
 }
 
 /// 连接性能指标
@@ -109,7 +127,7 @@ pub struct ConnectionMetrics {
     pub last_update: chrono::DateTime<chrono::Utc>,
 }
 
-/// 基准测试结果
+/// 基准测试结果 - 性能优化版本
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkResult {
     /// 测试名称
@@ -132,8 +150,8 @@ pub struct BenchmarkResult {
     pub memory_usage: u64,
     /// 测试时间
     pub timestamp: chrono::DateTime<chrono::Utc>,
-    /// 测试参数
-    pub parameters: HashMap<String, String>,
+    /// 测试参数 - 使用 AHashMap 提升性能
+    pub parameters: AHashMap<String, String>,
 }
 
 /// 性能测试套件
@@ -178,7 +196,7 @@ impl PerformanceMonitor {
             memory_metrics: Arc::new(RwLock::new(MemoryMetrics::default())),
             latency_metrics: Arc::new(RwLock::new(LatencyMetrics::default())),
             connection_metrics: Arc::new(RwLock::new(ConnectionMetrics::default())),
-            benchmark_results: Arc::new(RwLock::new(HashMap::new())),
+            benchmark_results: Arc::new(RwLock::new(AHashMap::new())),
         }
     }
 
@@ -209,32 +227,41 @@ impl PerformanceMonitor {
         metrics.last_update = chrono::Utc::now();
     }
 
-    /// 记录延迟
+    /// 记录延迟 - 性能优化版本
     pub async fn record_latency(&self, latency_ms: f64) {
         let mut metrics = self.latency_metrics.write().await;
         
-        // 更新延迟历史（保持最近1000个样本）
-        metrics.latency_history.push(latency_ms);
-        if metrics.latency_history.len() > 1000 {
-            metrics.latency_history.remove(0);
+        // 更新延迟历史（保持最近1000个样本） - 使用更高效的环形缓冲区逻辑
+        if metrics.latency_history.len() >= 1000 {
+            // 移除最旧的元素，保持固定大小
+            metrics.latency_history.drain(0..100); // 批量移除，减少操作次数
         }
+        metrics.latency_history.push(latency_ms);
 
         metrics.sample_count += 1;
         
-        // 计算统计信息
-        let mut sorted_history = metrics.latency_history.clone();
-        sorted_history.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
-        if !sorted_history.is_empty() {
-            metrics.min_latency = sorted_history[0];
-            metrics.max_latency = sorted_history[sorted_history.len() - 1];
-            metrics.average_latency = sorted_history.iter().sum::<f64>() / sorted_history.len() as f64;
+        // 只有在合理的样本数量时才计算统计信息，避免过度计算
+        if metrics.sample_count % 10 == 0 || metrics.latency_history.len() < 100 {
+            // 计算统计信息 - 避免不必要的克隆
+            let mut sorted_indices: SmallVec<[usize; 64]> = (0..metrics.latency_history.len()).collect();
+            sorted_indices.sort_by(|&a, &b| metrics.latency_history[a].partial_cmp(&metrics.latency_history[b]).unwrap());
             
-            // 计算百分位数
-            let len = sorted_history.len();
-            metrics.p50_latency = sorted_history[len * 50 / 100];
-            metrics.p95_latency = sorted_history[len * 95 / 100];
-            metrics.p99_latency = sorted_history[len * 99 / 100];
+            if !sorted_indices.is_empty() {
+                let first_idx = sorted_indices[0];
+                let last_idx = sorted_indices[sorted_indices.len() - 1];
+                
+                metrics.min_latency = metrics.latency_history[first_idx];
+                metrics.max_latency = metrics.latency_history[last_idx];
+                metrics.average_latency = metrics.latency_history.iter().sum::<f64>() / metrics.latency_history.len() as f64;
+                
+                // 计算百分位数
+                let len = sorted_indices.len();
+                if len > 0 {
+                    metrics.p50_latency = metrics.latency_history[sorted_indices[len * 50 / 100]];
+                    metrics.p95_latency = metrics.latency_history[sorted_indices[len * 95 / 100]];
+                    metrics.p99_latency = metrics.latency_history[sorted_indices[len * 99 / 100]];
+                }
+            }
         }
         
         metrics.last_update = chrono::Utc::now();
@@ -326,9 +353,9 @@ impl PerformanceMonitor {
         let start_time = Instant::now();
         let mut operations = 0u64;
         let mut total_bytes = 0u64;
-        let mut latencies = Vec::new();
+        let mut latencies = SmallVec::<[f64; 128]>::new();
         
-        let mut parameters = HashMap::new();
+        let mut parameters = AHashMap::new();
         parameters.insert("concurrency".to_string(), test_suite.concurrency.to_string());
         parameters.insert("duration_seconds".to_string(), test_suite.duration_seconds.to_string());
         parameters.insert("packet_size".to_string(), test_suite.packet_size.to_string());
@@ -407,9 +434,9 @@ impl PerformanceMonitor {
         info!("开始延迟基准测试: {} ({} 次迭代)", test_name, iterations);
         
         let start_time = Instant::now();
-        let mut latencies = Vec::with_capacity(iterations);
+        let mut latencies = SmallVec::<[f64; 64]>::with_capacity(iterations);
         
-        let mut parameters = HashMap::new();
+        let mut parameters = AHashMap::new();
         parameters.insert("iterations".to_string(), iterations.to_string());
         
         // 记录开始时的内存使用
@@ -585,7 +612,7 @@ pub enum ConnectionEvent {
     Timeout,
 }
 
-/// 完整的性能报告
+/// 完整的性能报告 - 性能优化版本
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceReport {
     /// 网络指标
@@ -596,8 +623,8 @@ pub struct PerformanceReport {
     pub latency: LatencyMetrics,
     /// 连接指标
     pub connection: ConnectionMetrics,
-    /// 基准测试结果
-    pub benchmarks: HashMap<String, BenchmarkResult>,
+    /// 基准测试结果 - 使用 AHashMap 提升性能
+    pub benchmarks: AHashMap<String, BenchmarkResult>,
     /// 报告生成时间
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }

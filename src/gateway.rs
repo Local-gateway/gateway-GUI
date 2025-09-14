@@ -1,6 +1,7 @@
 //! 网关主模块
 //! 
 //! 实现 WDIC 网关的核心功能，整合注册表、协议和网络管理。
+//! 性能优化版本：使用 AHashMap 和 SmallVec 提升性能。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -372,17 +373,17 @@ impl Gateway {
         Ok(())
     }
 
-    /// 处理目录搜索请求
+    /// 处理目录搜索请求 - 性能优化版本
     async fn handle_directory_search(
         &self,
         searcher_id: uuid::Uuid,
-        keywords: Vec<String>,
+        keywords: smallvec::SmallVec<[String; 4]>,
         search_id: uuid::Uuid,
         sender: SocketAddr,
     ) -> Result<()> {
         info!("处理来自 {} 的目录搜索请求，关键词: {:?}", searcher_id, keywords);
 
-        let matches = self.udp_broadcast_manager.search_files(&keywords).await;
+        let matches: smallvec::SmallVec<[String; 8]> = self.udp_broadcast_manager.search_files(&keywords).await.into();
         
         let response_token = UdpToken::DirectorySearchResponse {
             responder_id: self.get_local_entry().await.id,
@@ -697,6 +698,12 @@ impl Gateway {
     /// 
     /// * `keywords` - 搜索关键词
     /// 
+    /// 广播目录搜索请求 - 性能优化版本
+    /// 
+    /// # 参数
+    /// 
+    /// * `keywords` - 搜索关键词列表
+    /// 
     /// # 返回值
     /// 
     /// 广播结果
@@ -704,7 +711,7 @@ impl Gateway {
         let local_entry = self.get_local_entry().await;
         let search_token = UdpToken::DirectorySearch {
             searcher_id: local_entry.id,
-            keywords,
+            keywords: keywords.into(),
             search_id: uuid::Uuid::new_v4(),
         };
         
@@ -783,17 +790,17 @@ impl Gateway {
         Arc::clone(&self.performance_monitor)
     }
 
-    /// 运行综合性能测试套件
+    /// 运行综合性能测试套件 - 性能优化版本
     /// 
     /// 执行多种性能测试，包括吞吐量、延迟、内存使用等。
     /// 
     /// # 返回值
     /// 
     /// 包含所有测试结果的映射表
-    pub async fn run_comprehensive_performance_tests(&self) -> Result<std::collections::HashMap<String, BenchmarkResult>> {
+    pub async fn run_comprehensive_performance_tests(&self) -> Result<ahash::AHashMap<String, BenchmarkResult>> {
         info!("开始运行综合性能测试套件");
         
-        let mut results = std::collections::HashMap::new();
+        let mut results = ahash::AHashMap::new();
         
         // 1. 网络吞吐量测试
         info!("执行网络吞吐量测试...");
@@ -915,7 +922,7 @@ impl Gateway {
         
         let ops_per_second = operations as f64 / total_duration.as_secs_f64();
         
-        let mut parameters = std::collections::HashMap::new();
+        let mut parameters = ahash::AHashMap::new();
         parameters.insert("iterations".to_string(), iterations.to_string());
         parameters.insert("operation_types".to_string(), "add,get,cleanup".to_string());
         
@@ -971,7 +978,7 @@ impl Gateway {
         let end_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
         let peak_memory = self.performance_monitor.get_memory_metrics().await.peak_usage;
         
-        let mut parameters = std::collections::HashMap::new();
+        let mut parameters = ahash::AHashMap::new();
         parameters.insert("test_entries".to_string(), "1000".to_string());
         parameters.insert("test_messages".to_string(), "500".to_string());
         parameters.insert("peak_memory_mb".to_string(), format!("{:.2}", peak_memory as f64 / 1024.0 / 1024.0));
@@ -1055,7 +1062,7 @@ impl Gateway {
         let total_operations = (concurrent_tasks * operations_per_task * 3) as u64; // 3 operations per iteration
         let ops_per_second = total_operations as f64 / total_duration.as_secs_f64();
         
-        let mut parameters = std::collections::HashMap::new();
+        let mut parameters = ahash::AHashMap::new();
         parameters.insert("concurrent_tasks".to_string(), concurrent_tasks.to_string());
         parameters.insert("operations_per_task".to_string(), operations_per_task.to_string());
         
