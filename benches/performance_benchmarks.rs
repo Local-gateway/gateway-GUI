@@ -1,6 +1,7 @@
 //! 网关性能基准测试
 //!
 //! 测试网关各个组件的性能指标，包括内存使用、吞吐量、延迟等关键指标。
+//! 包含zstd压缩和lock-free并发性能测试。
 
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
 use std::time::Duration;
@@ -10,9 +11,14 @@ use wdic_gateway::{
     UdpToken, 
     DirectoryIndex,
     DirectoryEntry,
-    PerformanceMonitor
+    PerformanceMonitor,
+    CompressionManager,
+    CompressionConfig,
+    Registry,
+    RegistryEntry
 };
 use uuid::Uuid;
+use std::net::SocketAddr;
 
 /// 测试序列化性能
 fn bench_serialization(c: &mut Criterion) {
@@ -186,6 +192,145 @@ fn bench_stress_testing(c: &mut Criterion) {
     group.finish();
 }
 
+/// 测试zstd压缩性能
+fn bench_compression_performance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("zstd压缩性能测试");
+    
+    // 创建不同压缩级别的管理器
+    let configs = vec![
+        (1, "快速压缩"),
+        (3, "默认压缩"), 
+        (6, "高压缩比"),
+        (9, "最高压缩比"),
+    ];
+    
+    // 测试不同大小的数据
+    for size in [1024, 4096, 16384, 65536].iter() {
+        let data = "x".repeat(*size).into_bytes();
+        group.throughput(Throughput::Bytes(*size as u64));
+        
+        for (level, name) in &configs {
+            let config = CompressionConfig {
+                level: *level,
+                min_compress_size: 0, // 强制压缩所有数据
+                max_chunk_size: 1024 * 1024,
+                enable_dict: false,
+            };
+            let manager = CompressionManager::new(config);
+            
+            group.bench_with_input(
+                BenchmarkId::new(format!("压缩-{}", name), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        black_box(manager.compress(data).unwrap());
+                    });
+                },
+            );
+            
+            // 先压缩数据用于解压测试
+            let compressed_data = manager.compress(&data).unwrap();
+            group.bench_with_input(
+                BenchmarkId::new(format!("解压-{}", name), size),
+                &compressed_data,
+                |b, compressed| {
+                    b.iter(|| {
+                        black_box(manager.decompress(compressed).unwrap());
+                    });
+                },
+            );
+        }
+    }
+    
+    group.finish();
+}
+
+/// 测试lock-free注册表性能
+fn bench_lockfree_registry(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lock-free注册表性能测试");
+    
+    let registry = Registry::new(
+        "test_gateway".to_string(),
+        SocketAddr::from(([127, 0, 0, 1], 55555)),
+    );
+    
+    // 预填充一些数据
+    for i in 0..1000 {
+        let entry = RegistryEntry::new(
+            format!("gateway_{}", i),
+            SocketAddr::from(([192, 168, 1, (i % 255) as u8], 55555 + (i % 1000) as u16)),
+        );
+        registry.add_or_update(entry);
+    }
+    
+    group.bench_function("并发添加操作", |b| {
+        b.iter(|| {
+            for i in 0..100 {
+                let entry = RegistryEntry::new(
+                    format!("bench_gateway_{}", i),
+                    SocketAddr::from(([10, 0, 0, (i % 255) as u8], 55555 + (i % 1000) as u16)),
+                );
+                black_box(registry.add_or_update(entry));
+            }
+        });
+    });
+    
+    group.bench_function("并发查询操作", |b| {
+        let entries = registry.all_entries();
+        b.iter(|| {
+            for entry in &entries[..std::cmp::min(100, entries.len())] {
+                black_box(registry.get(&entry.id));
+            }
+        });
+    });
+    
+    group.bench_function("获取所有条目", |b| {
+        b.iter(|| {
+            black_box(registry.all_entries());
+        });
+    });
+    
+    group.bench_function("清理过期条目", |b| {
+        b.iter(|| {
+            black_box(registry.cleanup_expired(3600));
+        });
+    });
+    
+    group.finish();
+}
+
+/// 测试压缩比对比
+fn bench_compression_ratio(c: &mut Criterion) {
+    let mut group = c.benchmark_group("压缩比对比测试");
+    group.sample_size(50);
+    
+    // 测试不同类型的数据
+    let test_data = vec![
+        ("JSON数据", serde_json::to_string(&UdpToken::InfoMessage {
+            sender_id: Uuid::new_v4(),
+            content: "这是一个测试消息，包含一些重复的内容和结构化数据".repeat(20),
+            message_id: Uuid::new_v4(),
+        }).unwrap().into_bytes()),
+        ("重复文本", "重复的文本内容".repeat(100).into_bytes()),
+        ("随机数据", (0..1000).map(|i| (i * 17 + 7) as u8).collect()),
+        ("二进制数据", vec![0u8; 1000]),
+    ];
+    
+    for (data_type, data) in test_data {
+        let manager = CompressionManager::default();
+        
+        group.bench_function(format!("压缩-{}", data_type), |b| {
+            b.iter(|| {
+                let compressed = black_box(manager.compress(&data).unwrap());
+                let ratio = compressed.len() as f64 / data.len() as f64;
+                black_box(ratio);
+            });
+        });
+    }
+    
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_serialization,
@@ -193,7 +338,10 @@ criterion_group!(
     bench_directory_operations,
     bench_network_operations,
     bench_memory_usage,
-    bench_stress_testing
+    bench_stress_testing,
+    bench_compression_performance,
+    bench_lockfree_registry,
+    bench_compression_ratio
 );
 
 criterion_main!(benches);

@@ -158,11 +158,6 @@ impl CompressionManager {
         }
     }
 
-    /// 使用默认配置创建压缩管理器
-    pub fn default() -> Self {
-        Self::new(CompressionConfig::default())
-    }
-
     /// 获取配置
     pub fn config(&self) -> &CompressionConfig {
         &self.config
@@ -297,6 +292,12 @@ impl CompressionManager {
     }
 }
 
+impl Default for CompressionManager {
+    fn default() -> Self {
+        Self::new(CompressionConfig::default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,7 +343,7 @@ mod tests {
         let small_data = b"hello"; // 5字节，小于默认阈值128
         
         let compressed = manager.compress(small_data).unwrap();
-        assert_eq!(compressed[0], CompressionFlag::None.into());
+        assert_eq!(compressed[0], u8::from(CompressionFlag::None));
         assert_eq!(&compressed[1..], small_data);
         
         let decompressed = manager.decompress(&compressed).unwrap();
@@ -355,7 +356,7 @@ mod tests {
         let large_data = "a".repeat(500).into_bytes(); // 500字节，大于阈值
         
         let compressed = manager.compress(&large_data).unwrap();
-        assert_eq!(compressed[0], CompressionFlag::Zstd.into());
+        assert_eq!(compressed[0], u8::from(CompressionFlag::Zstd));
         assert!(compressed.len() < large_data.len() + 1); // 应该有压缩效果
         
         let decompressed = manager.decompress(&compressed).unwrap();
