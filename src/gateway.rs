@@ -12,6 +12,7 @@ use log::{info, warn, error, debug};
 use crate::registry::{Registry, RegistryEntry};
 use crate::protocol::{WdicMessage, WdicProtocol};
 use crate::network::{NetworkManager, NetworkEvent};
+use crate::udp_protocol::{UdpBroadcastManager, UdpBroadcastEvent, UdpToken};
 
 /// 网关配置
 #[derive(Debug, Clone)]
@@ -51,8 +52,10 @@ pub struct Gateway {
     config: GatewayConfig,
     /// 网关注册表
     registry: Arc<RwLock<Registry>>,
-    /// 网络管理器
+    /// 网络管理器（QUIC 协议）
     network_manager: Arc<NetworkManager>,
+    /// UDP 广播管理器
+    udp_broadcast_manager: Arc<UdpBroadcastManager>,
     /// 协议处理器
     protocol: WdicProtocol,
     /// 运行状态
@@ -92,9 +95,15 @@ impl Gateway {
         let port = if cfg!(test) && config.port == 55555 { 0 } else { config.port };
         let local_addr = SocketAddr::from(([0, 0, 0, 0], port));
         
-        // 创建网络管理器
+        // 创建网络管理器（QUIC 协议）
         let network_manager = Arc::new(NetworkManager::new(local_addr)?);
         let actual_addr = network_manager.local_addr();
+        
+        // 创建 UDP 广播管理器（UDP 协议）
+        // 在测试环境中使用 0 端口让系统自动分配
+        let udp_port = if cfg!(test) { 0 } else { actual_addr.port() };
+        let udp_addr = SocketAddr::from(([0, 0, 0, 0], udp_port));
+        let udp_broadcast_manager = Arc::new(UdpBroadcastManager::new(udp_addr)?);
         
         // 创建注册表
         let registry = Arc::new(RwLock::new(Registry::new(
@@ -102,12 +111,14 @@ impl Gateway {
             actual_addr,
         )));
 
-        info!("网关 '{}' 在地址 {} 创建", config.name, actual_addr);
+        info!("网关 '{}' 在地址 {} 创建（QUIC），UDP 广播在 {}", 
+              config.name, actual_addr, udp_broadcast_manager.local_addr());
 
         Ok(Self {
             config,
             registry,
             network_manager,
+            udp_broadcast_manager,
             protocol: WdicProtocol::new(),
             running: Arc::new(Mutex::new(false)),
         })
@@ -155,14 +166,22 @@ impl Gateway {
 
         info!("启动网关 '{}'", self.config.name);
 
-        // 启动网络管理器
+        // 启动网络管理器（QUIC 协议）
         self.network_manager.start().await?;
+        
+        // 启动 UDP 广播管理器
+        self.udp_broadcast_manager.start().await?;
 
         // 获取事件接收器
         let mut event_receiver = self.network_manager
             .take_event_receiver()
             .await
             .ok_or_else(|| anyhow::anyhow!("无法获取网络事件接收器"))?;
+            
+        let mut udp_event_receiver = self.udp_broadcast_manager
+            .take_event_receiver()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("无法获取 UDP 广播事件接收器"))?;
 
         // 启动初始广播
         self.initial_broadcast().await?;
@@ -170,12 +189,13 @@ impl Gateway {
         // 启动定期任务
         let registry_clone = Arc::clone(&self.registry);
         let network_clone = Arc::clone(&self.network_manager);
+        let udp_clone = Arc::clone(&self.udp_broadcast_manager);
         let config_clone = self.config.clone();
         let running_clone = Arc::clone(&self.running);
 
         // 广播任务
         tokio::spawn(async move {
-            Self::broadcast_task(registry_clone, network_clone, config_clone, running_clone).await;
+            Self::broadcast_task(registry_clone, network_clone, udp_clone, config_clone, running_clone).await;
         });
 
         // 注册表清理任务
@@ -188,7 +208,7 @@ impl Gateway {
         });
 
         // 主事件循环
-        self.event_loop(&mut event_receiver).await?;
+        self.event_loop(&mut event_receiver, &mut udp_event_receiver).await?;
 
         Ok(())
     }
@@ -211,7 +231,11 @@ impl Gateway {
     /// 主事件循环
     /// 
     /// 处理网络事件和消息。
-    async fn event_loop(&self, event_receiver: &mut tokio::sync::mpsc::UnboundedReceiver<NetworkEvent>) -> Result<()> {
+    async fn event_loop(
+        &self, 
+        event_receiver: &mut tokio::sync::mpsc::UnboundedReceiver<NetworkEvent>,
+        udp_event_receiver: &mut tokio::sync::mpsc::UnboundedReceiver<UdpBroadcastEvent>,
+    ) -> Result<()> {
         info!("进入主事件循环");
 
         while *self.running.lock().await {
@@ -219,6 +243,11 @@ impl Gateway {
                 Some(event) = event_receiver.recv() => {
                     if let Err(e) = self.handle_network_event(event).await {
                         error!("处理网络事件时出错: {}", e);
+                    }
+                }
+                Some(udp_event) = udp_event_receiver.recv() => {
+                    if let Err(e) = self.handle_udp_event(udp_event).await {
+                        error!("处理 UDP 事件时出错: {}", e);
                     }
                 }
                 _ = sleep(Duration::from_millis(100)) => {
@@ -280,6 +309,108 @@ impl Gateway {
             }
         }
 
+        Ok(())
+    }
+
+    /// 处理 UDP 广播事件
+    async fn handle_udp_event(&self, event: UdpBroadcastEvent) -> Result<()> {
+        match event {
+            UdpBroadcastEvent::TokenReceived { token, sender } => {
+                self.handle_udp_token(token, sender).await?;
+            }
+            UdpBroadcastEvent::BroadcastSent { token, sent_count } => {
+                debug!("UDP 令牌广播完成: {:?}，发送到 {} 个地址", token, sent_count);
+            }
+            UdpBroadcastEvent::NetworkError { error } => {
+                debug!("UDP 网络错误（已隐蔽处理）: {}", error);
+            }
+        }
+        Ok(())
+    }
+
+    /// 处理 UDP 令牌
+    async fn handle_udp_token(&self, token: UdpToken, sender: SocketAddr) -> Result<()> {
+        debug!("处理来自 {} 的 UDP 令牌: {:?}", sender, token);
+
+        match token {
+            UdpToken::DirectorySearch { searcher_id, keywords, search_id } => {
+                self.handle_directory_search(searcher_id, keywords, search_id, sender).await?;
+            }
+            UdpToken::DirectorySearchResponse { responder_id, search_id, matches } => {
+                info!("收到来自 {} 的目录搜索响应，搜索 ID: {}，匹配 {} 个文件", 
+                      responder_id, search_id, matches.len());
+            }
+            UdpToken::FileRequest { requester_id, file_path, request_id } => {
+                self.handle_file_request(requester_id, file_path, request_id, sender).await?;
+            }
+            UdpToken::FileResponse { responder_id, request_id, file_data, error } => {
+                if let Some(data) = file_data {
+                    info!("收到来自 {} 的文件响应，请求 ID: {}，数据大小: {} 字节", 
+                          responder_id, request_id, data.len());
+                } else if let Some(err) = error {
+                    warn!("文件请求失败，来自 {}，错误: {}", responder_id, err);
+                }
+            }
+            UdpToken::InfoMessage { sender_id, content, message_id } => {
+                info!("收到来自 {} 的信息消息（{}）: {}", sender_id, message_id, content);
+            }
+            UdpToken::PerformanceTest { tester_id, test_type, data_size, start_time: _ } => {
+                info!("收到来自 {} 的性能测试: 类型={}, 数据大小={} 字节", 
+                      tester_id, test_type, data_size);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 处理目录搜索请求
+    async fn handle_directory_search(
+        &self,
+        searcher_id: uuid::Uuid,
+        keywords: Vec<String>,
+        search_id: uuid::Uuid,
+        sender: SocketAddr,
+    ) -> Result<()> {
+        info!("处理来自 {} 的目录搜索请求，关键词: {:?}", searcher_id, keywords);
+
+        let matches = self.udp_broadcast_manager.search_files(&keywords).await;
+        
+        let response_token = UdpToken::DirectorySearchResponse {
+            responder_id: self.get_local_entry().await.id,
+            search_id,
+            matches,
+        };
+
+        self.udp_broadcast_manager.send_token_to(&response_token, sender).await?;
+        Ok(())
+    }
+
+    /// 处理文件请求
+    async fn handle_file_request(
+        &self,
+        requester_id: uuid::Uuid,
+        file_path: String,
+        request_id: uuid::Uuid,
+        sender: SocketAddr,
+    ) -> Result<()> {
+        info!("处理来自 {} 的文件请求: {}", requester_id, file_path);
+
+        let response_token = match self.udp_broadcast_manager.read_file(&file_path).await {
+            Ok(file_data) => UdpToken::FileResponse {
+                responder_id: self.get_local_entry().await.id,
+                request_id,
+                file_data: Some(file_data),
+                error: None,
+            },
+            Err(e) => UdpToken::FileResponse {
+                responder_id: self.get_local_entry().await.id,
+                request_id,
+                file_data: None,
+                error: Some(e.to_string()),
+            },
+        };
+
+        self.udp_broadcast_manager.send_token_to(&response_token, sender).await?;
         Ok(())
     }
 
@@ -408,6 +539,7 @@ impl Gateway {
     async fn broadcast_task(
         registry: Arc<RwLock<Registry>>,
         network_manager: Arc<NetworkManager>,
+        udp_broadcast_manager: Arc<UdpBroadcastManager>,
         config: GatewayConfig,
         running: Arc<Mutex<bool>>,
     ) {
@@ -417,14 +549,26 @@ impl Gateway {
             broadcast_interval.tick().await;
 
             let local_entry = registry.read().await.local_entry().clone();
-            let broadcast_message = WdicMessage::broadcast(local_entry);
+            let broadcast_message = WdicMessage::broadcast(local_entry.clone());
 
+            // QUIC 协议广播
             match network_manager.broadcast_message(&broadcast_message).await {
                 Ok(sent_count) => {
-                    debug!("定期广播发送到 {} 个地址", sent_count);
+                    debug!("QUIC 定期广播发送到 {} 个地址", sent_count);
                 }
                 Err(e) => {
-                    error!("定期广播失败: {}", e);
+                    error!("QUIC 定期广播失败: {}", e);
+                }
+            }
+
+            // UDP 协议信息广播
+            let info_content = format!("网关 '{}' 心跳广播", local_entry.name);
+            match udp_broadcast_manager.send_info_message(local_entry.id, info_content).await {
+                Ok(sent_count) => {
+                    debug!("UDP 定期广播发送到 {} 个地址", sent_count);
+                }
+                Err(e) => {
+                    error!("UDP 定期广播失败: {}", e);
                 }
             }
         }
@@ -481,9 +625,124 @@ impl Gateway {
 
         // 关闭网络管理器
         self.network_manager.shutdown().await?;
+        
+        // 关闭 UDP 广播管理器
+        self.udp_broadcast_manager.stop().await?;
 
         info!("网关 '{}' 已停止", self.config.name);
         Ok(())
+    }
+
+    /// 挂载目录
+    /// 
+    /// # 参数
+    /// 
+    /// * `name` - 挂载点名称
+    /// * `path` - 目录路径
+    /// 
+    /// # 返回值
+    /// 
+    /// 挂载结果
+    pub async fn mount_directory(&self, name: String, path: String) -> Result<()> {
+        self.udp_broadcast_manager.mount_directory(name, path).await
+    }
+
+    /// 卸载目录
+    /// 
+    /// # 参数
+    /// 
+    /// * `name` - 挂载点名称
+    /// 
+    /// # 返回值
+    /// 
+    /// 是否成功卸载
+    pub async fn unmount_directory(&self, name: &str) -> bool {
+        self.udp_broadcast_manager.unmount_directory(name).await
+    }
+
+    /// 获取已挂载目录列表
+    /// 
+    /// # 返回值
+    /// 
+    /// 挂载点名称列表
+    pub async fn get_mounted_directories(&self) -> Vec<String> {
+        self.udp_broadcast_manager.get_mounted_directories().await
+    }
+
+    /// 搜索文件
+    /// 
+    /// # 参数
+    /// 
+    /// * `keywords` - 搜索关键词
+    /// 
+    /// # 返回值
+    /// 
+    /// 匹配的文件路径列表
+    pub async fn search_files_locally(&self, keywords: &[String]) -> Vec<String> {
+        self.udp_broadcast_manager.search_files(keywords).await
+    }
+
+    /// 向网络广播目录搜索请求
+    /// 
+    /// # 参数
+    /// 
+    /// * `keywords` - 搜索关键词
+    /// 
+    /// # 返回值
+    /// 
+    /// 广播结果
+    pub async fn broadcast_directory_search(&self, keywords: Vec<String>) -> Result<usize> {
+        let local_entry = self.get_local_entry().await;
+        let search_token = UdpToken::DirectorySearch {
+            searcher_id: local_entry.id,
+            keywords,
+            search_id: uuid::Uuid::new_v4(),
+        };
+        
+        self.udp_broadcast_manager.broadcast_token(&search_token).await
+    }
+
+    /// 向网络广播信息消息
+    /// 
+    /// # 参数
+    /// 
+    /// * `content` - 消息内容
+    /// 
+    /// # 返回值
+    /// 
+    /// 广播结果
+    pub async fn broadcast_info_message(&self, content: String) -> Result<usize> {
+        let local_entry = self.get_local_entry().await;
+        self.udp_broadcast_manager.send_info_message(local_entry.id, content).await
+    }
+
+    /// 执行性能测试
+    /// 
+    /// # 参数
+    /// 
+    /// * `test_type` - 测试类型
+    /// * `data_size` - 测试数据大小
+    /// 
+    /// # 返回值
+    /// 
+    /// 测试结果（延迟毫秒数）
+    pub async fn run_performance_test(&self, test_type: String, data_size: usize) -> Result<u64> {
+        let local_entry = self.get_local_entry().await;
+        self.udp_broadcast_manager.performance_test(local_entry.id, test_type, data_size).await
+    }
+
+    /// 定向发送令牌到指定地址
+    /// 
+    /// # 参数
+    /// 
+    /// * `token` - 要发送的令牌
+    /// * `target` - 目标地址
+    /// 
+    /// # 返回值
+    /// 
+    /// 发送结果
+    pub async fn send_token_to(&self, token: UdpToken, target: SocketAddr) -> Result<()> {
+        self.udp_broadcast_manager.send_token_to(&token, target).await
     }
 
     /// 检查网关是否正在运行
@@ -561,5 +820,56 @@ mod tests {
         // 在未启动的情况下停止应该成功
         let result = gateway.stop().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_gateway_directory_operations() {
+        let gateway = Gateway::new("目录网关".to_string()).await.unwrap();
+        
+        // 测试挂载目录（使用当前目录）
+        let current_dir = std::env::current_dir().unwrap();
+        let mount_result = gateway.mount_directory(
+            "test_mount".to_string(),
+            current_dir.to_string_lossy().to_string()
+        ).await;
+
+        if mount_result.is_ok() {
+            // 测试获取挂载目录
+            let mounted = gateway.get_mounted_directories().await;
+            assert!(mounted.contains(&"test_mount".to_string()));
+
+            // 测试本地文件搜索
+            let results = gateway.search_files_locally(&["rs".to_string()]).await;
+            // 应该能找到一些 .rs 文件
+
+            // 测试卸载
+            let unmounted = gateway.unmount_directory("test_mount").await;
+            assert!(unmounted);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_udp_messaging() {
+        let gateway = Gateway::new("消息网关".to_string()).await.unwrap();
+        
+        // 测试广播信息消息
+        let result = gateway.broadcast_info_message("测试消息".to_string()).await;
+        assert!(result.is_ok());
+        
+        // 测试目录搜索广播
+        let search_result = gateway.broadcast_directory_search(vec!["test".to_string()]).await;
+        assert!(search_result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_gateway_performance_test() {
+        let gateway = Gateway::new("性能网关".to_string()).await.unwrap();
+        
+        // 测试性能测试功能
+        let result = gateway.run_performance_test("latency_test".to_string(), 1024).await;
+        assert!(result.is_ok());
+        
+        let latency = result.unwrap();
+        assert!(latency >= 0); // 延迟应该是非负数
     }
 }
