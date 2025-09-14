@@ -27,9 +27,11 @@ pub mod registry;
 pub mod protocol;
 pub mod network;
 pub mod udp_protocol;
+pub mod performance;
 
 pub use gateway::{Gateway, GatewayConfig};
 pub use registry::{Registry, RegistryEntry};
 pub use protocol::WdicProtocol;
 pub use network::NetworkManager;
 pub use udp_protocol::{UdpBroadcastManager, UdpToken, DirectoryIndex, UdpBroadcastEvent};
+pub use performance::{PerformanceMonitor, PerformanceReport, PerformanceTestSuite, BenchmarkResult};
