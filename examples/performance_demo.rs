@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
     let gateway = Gateway::new("性能测试网关".to_string()).await?;
     
     info!("网关创建成功，监听地址: {}", gateway.local_addr());
-    info!("UDP广播地址: {}", gateway.udp_broadcast_manager.local_addr());
+    info!("UDP广播地址: {}", gateway.udp_local_addr());
 
     // 启动网关
     tokio::spawn(async move {
@@ -111,9 +111,8 @@ async fn main() -> anyhow::Result<()> {
     
     // 测试目录挂载和搜索
     match test_gateway.mount_directory("demo".to_string(), ".".to_string()).await {
-        Ok(success) => {
-            if success {
-                info!("成功挂载当前目录为 'demo'");
+        Ok(_) => {
+            info!("成功挂载当前目录为 'demo'");
                 
                 // 广播目录搜索
                 match test_gateway.broadcast_directory_search(vec!["rs".to_string(), "toml".to_string()]).await {
@@ -131,7 +130,6 @@ async fn main() -> anyhow::Result<()> {
                     Err(e) => error!("信息消息广播失败: {}", e),
                 }
             }
-        }
         Err(e) => error!("目录挂载失败: {}", e),
     }
 

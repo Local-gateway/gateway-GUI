@@ -138,6 +138,11 @@ impl Gateway {
         self.network_manager.local_addr()
     }
 
+    /// 获取UDP广播地址
+    pub fn udp_local_addr(&self) -> SocketAddr {
+        self.udp_broadcast_manager.local_addr()
+    }
+
     /// 获取注册表快照
     /// 
     /// # 返回值
@@ -1087,7 +1092,7 @@ impl Gateway {
         report.push_str(&format!("网关名称: {}\n", self.config.name));
         report.push_str(&format!("监听地址: {}\n", self.local_addr()));
         report.push_str(&format!("UDP广播地址: {}\n", self.udp_broadcast_manager.local_addr()));
-        report.push_str(&format!("配置信息:\n"));
+        report.push_str("配置信息:\n");
         report.push_str(&format!("  - 广播间隔: {} 秒\n", self.config.broadcast_interval));
         report.push_str(&format!("  - 心跳间隔: {} 秒\n", self.config.heartbeat_interval));
         report.push_str(&format!("  - 连接超时: {} 秒\n", self.config.connection_timeout));
@@ -1130,7 +1135,7 @@ impl Gateway {
             network_bytes_sent: network_metrics.bytes_sent,
             network_bytes_received: network_metrics.bytes_received,
             average_latency_ms: latency_metrics.average_latency,
-            active_connections: active_connections,
+            active_connections,
             registry_size,
             connection_success_rate: connection_metrics.connection_success_rate,
             uptime_seconds: chrono::Utc::now().timestamp() - self.get_local_entry().await.last_seen.timestamp(),

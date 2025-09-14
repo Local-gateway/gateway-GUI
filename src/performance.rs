@@ -160,6 +160,12 @@ impl Default for PerformanceTestSuite {
     }
 }
 
+impl Default for PerformanceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerformanceMonitor {
     /// 创建新的性能监控器
     pub fn new() -> Self {
