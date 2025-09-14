@@ -10,9 +10,10 @@ use anyhow::Result;
 use log::{info, warn, error, debug};
 
 use crate::registry::{Registry, RegistryEntry};
-use crate::protocol::{WdicMessage, WdicProtocol};
+use crate::protocol::WdicMessage;
 use crate::network::{NetworkManager, NetworkEvent};
 use crate::udp_protocol::{UdpBroadcastManager, UdpBroadcastEvent, UdpToken};
+use crate::performance::{PerformanceMonitor, PerformanceTestSuite, BenchmarkResult};
 
 /// 网关配置
 #[derive(Debug, Clone)]
@@ -56,8 +57,8 @@ pub struct Gateway {
     network_manager: Arc<NetworkManager>,
     /// UDP 广播管理器
     udp_broadcast_manager: Arc<UdpBroadcastManager>,
-    /// 协议处理器
-    protocol: WdicProtocol,
+    /// 性能监控器
+    performance_monitor: Arc<PerformanceMonitor>,
     /// 运行状态
     running: Arc<Mutex<bool>>,
 }
@@ -111,6 +112,9 @@ impl Gateway {
             actual_addr,
         )));
 
+        // 创建性能监控器
+        let performance_monitor = Arc::new(PerformanceMonitor::new());
+
         info!("网关 '{}' 在地址 {} 创建（QUIC），UDP 广播在 {}", 
               config.name, actual_addr, udp_broadcast_manager.local_addr());
 
@@ -119,7 +123,7 @@ impl Gateway {
             registry,
             network_manager,
             udp_broadcast_manager,
-            protocol: WdicProtocol::new(),
+            performance_monitor,
             running: Arc::new(Mutex::new(false)),
         })
     }
@@ -764,6 +768,397 @@ impl Gateway {
         let active_connections = self.network_manager.active_connections_count().await;
         (registry_size, active_connections)
     }
+
+    /// 获取性能监控器
+    /// 
+    /// # 返回值
+    /// 
+    /// 性能监控器实例
+    pub fn performance_monitor(&self) -> Arc<PerformanceMonitor> {
+        Arc::clone(&self.performance_monitor)
+    }
+
+    /// 运行综合性能测试套件
+    /// 
+    /// 执行多种性能测试，包括吞吐量、延迟、内存使用等。
+    /// 
+    /// # 返回值
+    /// 
+    /// 包含所有测试结果的映射表
+    pub async fn run_comprehensive_performance_tests(&self) -> Result<std::collections::HashMap<String, BenchmarkResult>> {
+        info!("开始运行综合性能测试套件");
+        
+        let mut results = std::collections::HashMap::new();
+        
+        // 1. 网络吞吐量测试
+        info!("执行网络吞吐量测试...");
+        let throughput_suite = PerformanceTestSuite {
+            concurrency: 20,
+            duration_seconds: 10,
+            packet_size: 1024,
+            test_interval_ms: 5,
+        };
+        
+        match self.performance_monitor.run_throughput_benchmark("network_throughput", &throughput_suite).await {
+            Ok(result) => {
+                results.insert("network_throughput".to_string(), result);
+            }
+            Err(e) => warn!("网络吞吐量测试失败: {}", e),
+        }
+        
+        // 2. UDP 广播性能测试
+        info!("执行UDP广播性能测试...");
+        let udp_suite = PerformanceTestSuite {
+            concurrency: 10,
+            duration_seconds: 5,
+            packet_size: 512,
+            test_interval_ms: 10,
+        };
+        
+        match self.performance_monitor.run_throughput_benchmark("udp_broadcast", &udp_suite).await {
+            Ok(result) => {
+                results.insert("udp_broadcast".to_string(), result);
+            }
+            Err(e) => warn!("UDP广播性能测试失败: {}", e),
+        }
+        
+        // 3. 延迟测试
+        info!("执行延迟测试...");
+        match self.performance_monitor.run_latency_benchmark("message_latency", 1000).await {
+            Ok(result) => {
+                results.insert("message_latency".to_string(), result);
+            }
+            Err(e) => warn!("延迟测试失败: {}", e),
+        }
+        
+        // 4. 注册表性能测试
+        info!("执行注册表性能测试...");
+        match self.test_registry_performance().await {
+            Ok(result) => {
+                results.insert("registry_performance".to_string(), result);
+            }
+            Err(e) => warn!("注册表性能测试失败: {}", e),
+        }
+        
+        // 5. 内存使用分析
+        info!("执行内存使用分析...");
+        match self.test_memory_usage().await {
+            Ok(result) => {
+                results.insert("memory_usage".to_string(), result);
+            }
+            Err(e) => warn!("内存使用分析失败: {}", e),
+        }
+        
+        // 6. 并发连接测试
+        info!("执行并发连接测试...");
+        match self.test_concurrent_connections().await {
+            Ok(result) => {
+                results.insert("concurrent_connections".to_string(), result);
+            }
+            Err(e) => warn!("并发连接测试失败: {}", e),
+        }
+
+        info!("综合性能测试套件完成，共执行了 {} 个测试", results.len());
+        
+        Ok(results)
+    }
+
+    /// 测试注册表性能
+    async fn test_registry_performance(&self) -> Result<BenchmarkResult> {
+        let start_time = std::time::Instant::now();
+        let iterations = 10000;
+        let mut operations = 0u64;
+        
+        // 记录开始时的内存使用
+        self.performance_monitor.update_system_metrics().await?;
+        let start_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
+        
+        // 测试注册表操作
+        for i in 0..iterations {
+            let entry = RegistryEntry::new(
+                format!("test_gateway_{}", i),
+                std::net::SocketAddr::from(([192, 168, 1, (i % 255) as u8], 55555 + (i % 1000) as u16)),
+            );
+            
+            // 添加条目
+            {
+                let mut registry = self.registry.write().await;
+                registry.add_or_update(entry.clone());
+            }
+            operations += 1;
+            
+            // 查询条目
+            {
+                let registry = self.registry.read().await;
+                let _ = registry.get_by_address(&entry.address);
+            }
+            operations += 1;
+            
+            // 每1000次操作清理一次过期条目
+            if i % 1000 == 0 {
+                let mut registry = self.registry.write().await;
+                registry.cleanup_expired(300);
+                operations += 1;
+            }
+        }
+        
+        let total_duration = start_time.elapsed();
+        
+        // 记录结束时的内存使用
+        self.performance_monitor.update_system_metrics().await?;
+        let end_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
+        
+        let ops_per_second = operations as f64 / total_duration.as_secs_f64();
+        
+        let mut parameters = std::collections::HashMap::new();
+        parameters.insert("iterations".to_string(), iterations.to_string());
+        parameters.insert("operation_types".to_string(), "add,get,cleanup".to_string());
+        
+        Ok(BenchmarkResult {
+            name: "registry_performance".to_string(),
+            duration_ms: total_duration.as_secs_f64() * 1000.0,
+            operations,
+            ops_per_second,
+            average_latency: (total_duration.as_secs_f64() * 1000.0) / operations as f64,
+            min_latency: 0.0,
+            max_latency: 0.0,
+            throughput_bps: 0.0,
+            memory_usage: end_memory.saturating_sub(start_memory),
+            timestamp: chrono::Utc::now(),
+            parameters,
+        })
+    }
+
+    /// 测试内存使用情况
+    async fn test_memory_usage(&self) -> Result<BenchmarkResult> {
+        let start_time = std::time::Instant::now();
+        
+        // 更新系统指标
+        self.performance_monitor.update_system_metrics().await?;
+        let start_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
+        
+        // 创建大量数据以测试内存使用
+        let mut test_data = Vec::new();
+        for i in 0..1000 {
+            let entry = RegistryEntry::new(
+                format!("memory_test_gateway_{}", i),
+                std::net::SocketAddr::from(([10, 0, (i / 255) as u8, (i % 255) as u8], 55555)),
+            );
+            test_data.push(entry);
+        }
+        
+        // 模拟一些 UDP 消息
+        for i in 0..500 {
+            let token = UdpToken::InfoMessage {
+                sender_id: uuid::Uuid::new_v4(),
+                content: format!("内存测试消息 {} - 这是一个用于测试内存使用的较长消息内容", i),
+                message_id: uuid::Uuid::new_v4(),
+            };
+            
+            // 序列化消息（模拟内存使用）
+            let _ = serde_json::to_string(&token);
+        }
+        
+        let total_duration = start_time.elapsed();
+        
+        // 更新并获取最终内存使用
+        self.performance_monitor.update_system_metrics().await?;
+        let end_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
+        let peak_memory = self.performance_monitor.get_memory_metrics().await.peak_usage;
+        
+        let mut parameters = std::collections::HashMap::new();
+        parameters.insert("test_entries".to_string(), "1000".to_string());
+        parameters.insert("test_messages".to_string(), "500".to_string());
+        parameters.insert("peak_memory_mb".to_string(), format!("{:.2}", peak_memory as f64 / 1024.0 / 1024.0));
+        
+        Ok(BenchmarkResult {
+            name: "memory_usage".to_string(),
+            duration_ms: total_duration.as_secs_f64() * 1000.0,
+            operations: 1500, // 1000 entries + 500 messages
+            ops_per_second: 1500.0 / total_duration.as_secs_f64(),
+            average_latency: (total_duration.as_secs_f64() * 1000.0) / 1500.0,
+            min_latency: 0.0,
+            max_latency: 0.0,
+            throughput_bps: 0.0,
+            memory_usage: end_memory.saturating_sub(start_memory),
+            timestamp: chrono::Utc::now(),
+            parameters,
+        })
+    }
+
+    /// 测试并发连接性能
+    async fn test_concurrent_connections(&self) -> Result<BenchmarkResult> {
+        let start_time = std::time::Instant::now();
+        let concurrent_tasks = 50;
+        let operations_per_task = 20;
+        
+        // 记录开始时的内存使用
+        self.performance_monitor.update_system_metrics().await?;
+        let start_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
+        
+        let mut handles = Vec::new();
+        
+        // 启动并发任务
+        for task_id in 0..concurrent_tasks {
+            let registry = Arc::clone(&self.registry);
+            let perf_monitor = Arc::clone(&self.performance_monitor);
+            
+            let handle = tokio::spawn(async move {
+                for i in 0..operations_per_task {
+                    // 模拟连接事件
+                    perf_monitor.record_connection_event(
+                        crate::performance::ConnectionEvent::Connected, 
+                        None
+                    ).await;
+                    
+                    // 添加注册表条目
+                    let entry = RegistryEntry::new(
+                        format!("concurrent_gateway_{}_{}", task_id, i),
+                        std::net::SocketAddr::from(([172, 16, (task_id % 255) as u8, (i % 255) as u8], 55555 + i as u16)),
+                    );
+                    
+                    {
+                        let mut reg = registry.write().await;
+                        reg.add_or_update(entry);
+                    }
+                    
+                    // 模拟一些处理时间
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    
+                    // 模拟断开连接
+                    perf_monitor.record_connection_event(
+                        crate::performance::ConnectionEvent::Disconnected, 
+                        Some(1.0)
+                    ).await;
+                }
+            });
+            
+            handles.push(handle);
+        }
+        
+        // 等待所有任务完成
+        for handle in handles {
+            let _ = handle.await;
+        }
+        
+        let total_duration = start_time.elapsed();
+        
+        // 记录结束时的内存使用
+        self.performance_monitor.update_system_metrics().await?;
+        let end_memory = self.performance_monitor.get_memory_metrics().await.current_usage;
+        
+        let total_operations = (concurrent_tasks * operations_per_task * 3) as u64; // 3 operations per iteration
+        let ops_per_second = total_operations as f64 / total_duration.as_secs_f64();
+        
+        let mut parameters = std::collections::HashMap::new();
+        parameters.insert("concurrent_tasks".to_string(), concurrent_tasks.to_string());
+        parameters.insert("operations_per_task".to_string(), operations_per_task.to_string());
+        
+        Ok(BenchmarkResult {
+            name: "concurrent_connections".to_string(),
+            duration_ms: total_duration.as_secs_f64() * 1000.0,
+            operations: total_operations,
+            ops_per_second,
+            average_latency: (total_duration.as_secs_f64() * 1000.0) / total_operations as f64,
+            min_latency: 0.0,
+            max_latency: 0.0,
+            throughput_bps: 0.0,
+            memory_usage: end_memory.saturating_sub(start_memory),
+            timestamp: chrono::Utc::now(),
+            parameters,
+        })
+    }
+
+    /// 生成详细的性能报告
+    /// 
+    /// # 返回值
+    /// 
+    /// 包含所有性能指标的详细报告
+    pub async fn generate_performance_report(&self) -> String {
+        // 更新系统指标
+        let _ = self.performance_monitor.update_system_metrics().await;
+        
+        // 生成基础报告
+        let base_report = self.performance_monitor.generate_report().await;
+        
+        // 添加网关特定信息
+        let mut report = String::new();
+        report.push_str("=== WDIC 网关性能报告 ===\n");
+        report.push_str(&format!("网关名称: {}\n", self.config.name));
+        report.push_str(&format!("监听地址: {}\n", self.local_addr()));
+        report.push_str(&format!("UDP广播地址: {}\n", self.udp_broadcast_manager.local_addr()));
+        report.push_str(&format!("配置信息:\n"));
+        report.push_str(&format!("  - 广播间隔: {} 秒\n", self.config.broadcast_interval));
+        report.push_str(&format!("  - 心跳间隔: {} 秒\n", self.config.heartbeat_interval));
+        report.push_str(&format!("  - 连接超时: {} 秒\n", self.config.connection_timeout));
+        report.push_str(&format!("  - 注册表清理间隔: {} 秒\n\n", self.config.registry_cleanup_interval));
+        
+        // 添加当前状态信息
+        let (registry_size, active_connections) = self.get_stats().await;
+        report.push_str("## 当前状态\n");
+        report.push_str(&format!("注册表条目数: {}\n", registry_size));
+        report.push_str(&format!("活跃连接数: {}\n", active_connections));
+        report.push_str(&format!("运行状态: {}\n\n", if *self.running.lock().await { "运行中" } else { "已停止" }));
+        
+        // 添加基础性能报告
+        report.push_str(&base_report);
+        
+        report
+    }
+
+    /// 运行快速性能检查
+    /// 
+    /// 执行一个快速的性能检查，适用于健康检查或监控。
+    /// 
+    /// # 返回值
+    /// 
+    /// 简化的性能摘要
+    pub async fn quick_performance_check(&self) -> Result<QuickPerformanceStats> {
+        // 更新系统指标
+        self.performance_monitor.update_system_metrics().await?;
+        
+        let memory_metrics = self.performance_monitor.get_memory_metrics().await;
+        let network_metrics = self.performance_monitor.get_network_metrics().await;
+        let latency_metrics = self.performance_monitor.get_latency_metrics().await;
+        let connection_metrics = self.performance_monitor.get_connection_metrics().await;
+        
+        let (registry_size, active_connections) = self.get_stats().await;
+        
+        Ok(QuickPerformanceStats {
+            memory_usage_mb: memory_metrics.current_usage as f64 / 1024.0 / 1024.0,
+            memory_usage_percentage: memory_metrics.usage_percentage,
+            network_bytes_sent: network_metrics.bytes_sent,
+            network_bytes_received: network_metrics.bytes_received,
+            average_latency_ms: latency_metrics.average_latency,
+            active_connections: active_connections,
+            registry_size,
+            connection_success_rate: connection_metrics.connection_success_rate,
+            uptime_seconds: chrono::Utc::now().timestamp() - self.get_local_entry().await.last_seen.timestamp(),
+        })
+    }
+}
+
+/// 快速性能统计信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct QuickPerformanceStats {
+    /// 内存使用量（MB）
+    pub memory_usage_mb: f64,
+    /// 内存使用率（百分比）
+    pub memory_usage_percentage: f64,
+    /// 网络发送字节数
+    pub network_bytes_sent: u64,
+    /// 网络接收字节数
+    pub network_bytes_received: u64,
+    /// 平均延迟（毫秒）
+    pub average_latency_ms: f64,
+    /// 活跃连接数
+    pub active_connections: usize,
+    /// 注册表大小
+    pub registry_size: usize,
+    /// 连接成功率（百分比）
+    pub connection_success_rate: f64,
+    /// 运行时间（秒）
+    pub uptime_seconds: i64,
 }
 
 #[cfg(test)]
@@ -803,7 +1198,7 @@ mod tests {
         
         let local_entry = gateway.get_local_entry().await;
         assert_eq!(local_entry.name, "信息网关");
-        assert!(local_entry.address.port() >= 0); // 允许端口为 0 或正数
+        // 验证端口已分配
 
         let registry_snapshot = gateway.get_registry_snapshot().await;
         assert!(registry_snapshot.is_empty()); // 新网关注册表应该为空
@@ -839,7 +1234,7 @@ mod tests {
             assert!(mounted.contains(&"test_mount".to_string()));
 
             // 测试本地文件搜索
-            let results = gateway.search_files_locally(&["rs".to_string()]).await;
+            let _results = gateway.search_files_locally(&["rs".to_string()]).await;
             // 应该能找到一些 .rs 文件
 
             // 测试卸载
@@ -870,6 +1265,6 @@ mod tests {
         assert!(result.is_ok());
         
         let latency = result.unwrap();
-        assert!(latency >= 0); // 延迟应该是非负数
+        assert!(latency <= 1000); // 延迟应该在合理范围内（毫秒）
     }
 }

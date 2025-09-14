@@ -1,9 +1,9 @@
 //! UDP 广播协议模块
 //! 
-//! 实现基于 UDP 的 WDIC 协议自主广播功能，所有网关都是一等公民。
+//! 实现基于 UDP 的 WDIC 协议自主广播功能，支持 IPv4/IPv6 双栈网络，所有网关都是一等公民。
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::Duration;
@@ -302,23 +302,128 @@ impl UdpBroadcastManager {
     }
 
     /// 生成广播地址列表
+    /// 生成广播地址列表（支持 IPv4/IPv6 双栈）
+    /// 
+    /// 这个函数会：
+    /// 1. 发现本地所有网络接口
+    /// 2. 为 IPv4 地址生成广播地址
+    /// 3. 为 IPv6 地址生成多播地址
+    /// 4. 优先使用内网地址，在没有内网地址时使用公网地址
+    /// 
+    /// # 参数
+    /// 
+    /// * `local_addr` - 本地绑定地址
+    /// 
+    /// # 返回值
+    /// 
+    /// 广播和多播地址列表
     fn generate_broadcast_addresses(local_addr: SocketAddr) -> Vec<SocketAddr> {
         let mut addresses = Vec::new();
         let port = local_addr.port();
 
-        // 添加主要的广播地址
-        addresses.push(SocketAddr::from(([255, 255, 255, 255], port)));
-        
-        // 如果是 IPv4，根据本地 IP 生成子网广播地址
-        if let std::net::IpAddr::V4(ipv4) = local_addr.ip() {
-            let octets = ipv4.octets();
+        debug!("为UDP地址 {} 生成广播地址列表", local_addr);
+
+        // 获取所有网络接口
+        let interfaces = match if_addrs::get_if_addrs() {
+            Ok(interfaces) => interfaces,
+            Err(e) => {
+                debug!("无法获取网络接口列表: {}, 使用默认广播地址", e);
+                return Self::generate_fallback_addresses(port);
+            }
+        };
+
+        // 分类接口地址
+        let mut ipv4_private = Vec::new();
+        let mut ipv4_public = Vec::new();
+        let mut ipv6_private = Vec::new();
+        let mut ipv6_public = Vec::new();
+
+        for interface in interfaces {
+            if interface.is_loopback() {
+                continue;
+            }
+
+            match interface.ip() {
+                IpAddr::V4(ipv4) => {
+                    if Self::is_private_ipv4(ipv4) {
+                        ipv4_private.push(ipv4);
+                    } else {
+                        ipv4_public.push(ipv4);
+                    }
+                }
+                IpAddr::V6(ipv6) => {
+                    if Self::is_private_ipv6(ipv6) {
+                        ipv6_private.push(ipv6);
+                    } else {
+                        ipv6_public.push(ipv6);
+                    }
+                }
+            }
+        }
+
+        // 生成 IPv4 广播地址
+        Self::add_ipv4_broadcasts(&mut addresses, &ipv4_private, port);
+        if ipv4_private.is_empty() && !ipv4_public.is_empty() {
+            info!("UDP：没有找到私有 IPv4 地址，使用公网 IPv4 地址进行广播");
+            Self::add_ipv4_public_broadcasts(&mut addresses, &ipv4_public, port);
+        }
+
+        // 生成 IPv6 多播地址
+        if !ipv6_private.is_empty() || !ipv6_public.is_empty() {
+            Self::add_ipv6_multicasts(&mut addresses, port);
+        }
+
+        // 如果没有找到任何有效地址，使用后备地址
+        if addresses.is_empty() {
+            debug!("UDP：没有找到有效的网络接口，使用默认广播地址");
+            addresses = Self::generate_fallback_addresses(port);
+        }
+
+        debug!("UDP：生成了 {} 个广播/多播地址", addresses.len());
+        for addr in &addresses {
+            debug!("  UDP - {}", addr);
+        }
+
+        addresses
+    }
+
+    /// 判断是否为私有 IPv4 地址
+    fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+        let octets = ip.octets();
+        // 10.0.0.0/8
+        if octets[0] == 10 {
+            return true;
+        }
+        // 172.16.0.0/12
+        if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+            return true;
+        }
+        // 192.168.0.0/16
+        if octets[0] == 192 && octets[1] == 168 {
+            return true;
+        }
+        false
+    }
+
+    /// 判断是否为私有 IPv6 地址
+    fn is_private_ipv6(ip: Ipv6Addr) -> bool {
+        // 链路本地地址 (fe80::/10)
+        if ip.segments()[0] & 0xffc0 == 0xfe80 {
+            return true;
+        }
+        // 唯一本地地址 (fc00::/7) 或 (fd00::/8)
+        if ip.segments()[0] & 0xfe00 == 0xfc00 {
+            return true;
+        }
+        false
+    }
+
+    /// 添加 IPv4 私有网络广播地址
+    fn add_ipv4_broadcasts(addresses: &mut Vec<SocketAddr>, ipv4_addrs: &[Ipv4Addr], port: u16) {
+        for &ip in ipv4_addrs {
+            let octets = ip.octets();
             
-            // 常见的私有网络广播地址
-            addresses.push(SocketAddr::from(([192, 168, 255, 255], port)));
-            addresses.push(SocketAddr::from(([10, 255, 255, 255], port)));
-            addresses.push(SocketAddr::from(([172, 31, 255, 255], port)));
-            
-            // 基于当前 IP 的子网广播
+            // 基于具体 IP 地址生成子网广播地址
             if octets[0] == 192 && octets[1] == 168 {
                 addresses.push(SocketAddr::from(([192, 168, octets[2], 255], port)));
             } else if octets[0] == 10 {
@@ -328,7 +433,49 @@ impl UdpBroadcastManager {
             }
         }
 
-        addresses
+        // 添加常见的私有网络广播地址
+        if !ipv4_addrs.is_empty() {
+            addresses.push(SocketAddr::from(([192, 168, 255, 255], port)));
+            addresses.push(SocketAddr::from(([10, 255, 255, 255], port)));
+            addresses.push(SocketAddr::from(([172, 31, 255, 255], port)));
+        }
+    }
+
+    /// 添加 IPv4 公网广播地址
+    fn add_ipv4_public_broadcasts(addresses: &mut Vec<SocketAddr>, _ipv4_addrs: &[Ipv4Addr], port: u16) {
+        // 对于公网地址，我们只能使用有限广播
+        addresses.push(SocketAddr::from(([255, 255, 255, 255], port)));
+    }
+
+    /// 添加 IPv6 多播地址
+    fn add_ipv6_multicasts(addresses: &mut Vec<SocketAddr>, port: u16) {
+        // 站点本地多播 (ff05::1)
+        addresses.push(SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0xff05, 0, 0, 0, 0, 0, 0, 1)),
+            port,
+        ));
+        
+        // 链路本地多播 (ff02::1)
+        addresses.push(SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1)),
+            port,
+        ));
+        
+        // 自定义的 WDIC UDP 多播地址 (ff05::5556)
+        addresses.push(SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0xff05, 0, 0, 0, 0, 0, 0, 0x5556)),
+            port,
+        ));
+    }
+
+    /// 生成后备广播地址
+    fn generate_fallback_addresses(port: u16) -> Vec<SocketAddr> {
+        vec![
+            SocketAddr::from(([255, 255, 255, 255], port)),
+            SocketAddr::from(([192, 168, 255, 255], port)),
+            SocketAddr::from(([10, 255, 255, 255], port)),
+            SocketAddr::from(([172, 31, 255, 255], port)),
+        ]
     }
 
     /// 启动 UDP 广播服务
@@ -398,7 +545,7 @@ impl UdpBroadcastManager {
                     // 隐蔽 OS 异常，只记录调试信息
                     debug!("UDP 接收时出现 OS 异常（已隐蔽处理）: {}", e);
                     let _ = event_sender.send(UdpBroadcastEvent::NetworkError {
-                        error: format!("网络通信异常"),
+                        error: "网络通信异常".to_string(),
                     });
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -682,7 +829,7 @@ mod tests {
 
     #[test]
     fn test_directory_index_search() {
-        let mut index = DirectoryIndex {
+        let index = DirectoryIndex {
             root_path: "/test".to_string(),
             entries: vec![
                 DirectoryEntry {
@@ -737,7 +884,7 @@ mod tests {
             assert!(mounted.contains(&"test_mount".to_string()));
 
             // 测试搜索功能
-            let results = manager.search_files(&["rs".to_string()]).await;
+            let _results = manager.search_files(&["rs".to_string()]).await;
             // 应该能找到一些 .rs 文件
             
             // 测试卸载
@@ -772,6 +919,6 @@ mod tests {
         
         assert!(result.is_ok());
         let latency = result.unwrap();
-        assert!(latency >= 0); // 延迟应该是非负数
+        assert!(latency <= 1000); // 延迟应该在合理范围内（毫秒）
     }
 }
