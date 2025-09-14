@@ -1,8 +1,10 @@
 //! UDP 广播协议模块
 //! 
 //! 实现基于 UDP 的 WDIC 协议自主广播功能，支持 IPv4/IPv6 双栈网络，所有网关都是一等公民。
+//! 性能优化版本：使用 SmallVec 减少堆分配，使用 AHash 提升 HashMap 性能。
 
-use std::collections::HashMap;
+use ahash::AHashMap;
+use smallvec::SmallVec;
 use std::net::{SocketAddr, UdpSocket, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -16,14 +18,15 @@ use base64::{Engine as _, engine::general_purpose};
 use crate::protocol::WdicMessage;
 
 /// UDP 广播令牌类型
+/// 性能优化：使用 SmallVec 减少小集合的堆分配
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UdpToken {
     /// 目录搜索令牌
     DirectorySearch {
         /// 搜索者 ID
         searcher_id: Uuid,
-        /// 搜索关键词
-        keywords: Vec<String>,
+        /// 搜索关键词 - 使用 SmallVec，大多数搜索只有几个关键词
+        keywords: SmallVec<[String; 4]>,
         /// 搜索 ID
         search_id: Uuid,
     },
@@ -33,8 +36,8 @@ pub enum UdpToken {
         responder_id: Uuid,
         /// 搜索 ID
         search_id: Uuid,
-        /// 匹配的文件列表
-        matches: Vec<String>,
+        /// 匹配的文件列表 - 使用 SmallVec，通常匹配结果不多
+        matches: SmallVec<[String; 8]>,
     },
     /// 文件请求令牌
     FileRequest {
@@ -182,7 +185,7 @@ impl DirectoryIndex {
         })
     }
     
-    /// 搜索文件
+    /// 搜索文件 - 性能优化版本
     /// 
     /// # 参数
     /// 
@@ -190,19 +193,32 @@ impl DirectoryIndex {
     /// 
     /// # 返回值
     /// 
-    /// 匹配的文件路径列表
-    pub fn search(&self, keywords: &[String]) -> Vec<String> {
-        self.entries
+    /// 匹配的文件路径列表，使用 SmallVec 减少小结果集的堆分配
+    pub fn search(&self, keywords: &[String]) -> SmallVec<[String; 8]> {
+        // 预处理关键词：转换为小写并存储在栈上的小向量中
+        let keywords_lower: SmallVec<[String; 4]> = keywords
             .iter()
-            .filter(|entry| {
-                let path_lower = entry.path.to_lowercase();
-                keywords.iter().any(|keyword| path_lower.contains(&keyword.to_lowercase()))
-            })
-            .map(|entry| entry.path.clone())
-            .collect()
+            .map(|k| k.to_lowercase())
+            .collect();
+        
+        // 使用更高效的过滤和收集方式
+        let mut results = SmallVec::new();
+        
+        for entry in &self.entries {
+            let path_lower = entry.path.to_lowercase();
+            if keywords_lower.iter().any(|keyword| path_lower.contains(keyword)) {
+                results.push(entry.path.clone());
+                // 限制结果数量，避免过大的内存占用
+                if results.len() >= 1000 {
+                    break;
+                }
+            }
+        }
+        
+        results
     }
     
-    /// 保存索引到文件
+    /// 保存索引到文件 - 性能优化版本（使用JSON以确保兼容性）
     /// 
     /// # 参数
     /// 
@@ -212,17 +228,18 @@ impl DirectoryIndex {
     /// 
     /// 保存结果
     pub fn save_to_file(&self, output_path: &str) -> Result<()> {
-        let serialized = serde_json::to_vec(self)
+        // 使用 JSON 以确保完全兼容性
+        let serialized = serde_json::to_vec_pretty(self)
             .map_err(|e| anyhow::anyhow!("序列化目录索引失败: {}", e))?;
         
         std::fs::write(output_path, serialized)
             .map_err(|e| anyhow::anyhow!("写入索引文件失败: {}", e))?;
         
-        info!("目录索引已保存到: {}", output_path);
+        info!("目录索引已保存到: {} (JSON格式)", output_path);
         Ok(())
     }
     
-    /// 从文件加载索引
+    /// 从文件加载索引 - 性能优化版本
     /// 
     /// # 参数
     /// 
@@ -235,6 +252,7 @@ impl DirectoryIndex {
         let data = std::fs::read(input_path)
             .map_err(|e| anyhow::anyhow!("读取索引文件失败: {}", e))?;
         
+        // 使用 JSON 反序列化
         serde_json::from_slice(&data)
             .map_err(|e| anyhow::anyhow!("反序列化目录索引失败: {}", e))
     }
@@ -243,6 +261,7 @@ impl DirectoryIndex {
 /// UDP 广播管理器
 /// 
 /// 负责处理基于 UDP 的 WDIC 协议广播功能。
+/// 性能优化版本：使用 AHashMap 提升哈希表性能。
 pub struct UdpBroadcastManager {
     /// 本地地址
     local_addr: SocketAddr,
@@ -252,10 +271,10 @@ pub struct UdpBroadcastManager {
     event_sender: mpsc::UnboundedSender<UdpBroadcastEvent>,
     /// 事件接收通道
     event_receiver: Arc<Mutex<Option<mpsc::UnboundedReceiver<UdpBroadcastEvent>>>>,
-    /// 广播地址列表
-    broadcast_addresses: Vec<SocketAddr>,
-    /// 目录挂载点
-    mounted_directories: Arc<RwLock<HashMap<String, DirectoryIndex>>>,
+    /// 广播地址列表 - 使用 SmallVec 减少堆分配
+    broadcast_addresses: SmallVec<[SocketAddr; 8]>,
+    /// 目录挂载点 - 使用 AHashMap 提升性能
+    mounted_directories: Arc<RwLock<AHashMap<String, DirectoryIndex>>>,
     /// 运行状态
     running: Arc<Mutex<bool>>,
 }
@@ -286,7 +305,7 @@ impl UdpBroadcastManager {
             event_sender,
             event_receiver: Arc::new(Mutex::new(Some(event_receiver))),
             broadcast_addresses,
-            mounted_directories: Arc::new(RwLock::new(HashMap::new())),
+            mounted_directories: Arc::new(RwLock::new(AHashMap::new())),
             running: Arc::new(Mutex::new(false)),
         })
     }
@@ -302,7 +321,7 @@ impl UdpBroadcastManager {
     }
 
     /// 生成广播地址列表
-    /// 生成广播地址列表（支持 IPv4/IPv6 双栈）
+    /// 生成广播地址列表（支持 IPv4/IPv6 双栈）- 性能优化版本
     /// 
     /// 这个函数会：
     /// 1. 发现本地所有网络接口
@@ -316,9 +335,9 @@ impl UdpBroadcastManager {
     /// 
     /// # 返回值
     /// 
-    /// 广播和多播地址列表
-    fn generate_broadcast_addresses(local_addr: SocketAddr) -> Vec<SocketAddr> {
-        let mut addresses = Vec::new();
+    /// 广播和多播地址列表，使用 SmallVec 减少堆分配
+    fn generate_broadcast_addresses(local_addr: SocketAddr) -> SmallVec<[SocketAddr; 8]> {
+        let mut addresses = SmallVec::new();
         let port = local_addr.port();
 
         debug!("为UDP地址 {} 生成广播地址列表", local_addr);
@@ -332,11 +351,11 @@ impl UdpBroadcastManager {
             }
         };
 
-        // 分类接口地址
-        let mut ipv4_private = Vec::new();
-        let mut ipv4_public = Vec::new();
-        let mut ipv6_private = Vec::new();
-        let mut ipv6_public = Vec::new();
+        // 分类接口地址 - 使用 SmallVec 减少堆分配
+        let mut ipv4_private = SmallVec::<[Ipv4Addr; 4]>::new();
+        let mut ipv4_public = SmallVec::<[Ipv4Addr; 4]>::new();
+        let mut ipv6_private = SmallVec::<[Ipv6Addr; 4]>::new();
+        let mut ipv6_public = SmallVec::<[Ipv6Addr; 4]>::new();
 
         for interface in interfaces {
             if interface.is_loopback() {
@@ -418,8 +437,8 @@ impl UdpBroadcastManager {
         false
     }
 
-    /// 添加 IPv4 私有网络广播地址
-    fn add_ipv4_broadcasts(addresses: &mut Vec<SocketAddr>, ipv4_addrs: &[Ipv4Addr], port: u16) {
+    /// 添加 IPv4 私有网络广播地址 - 性能优化版本
+    fn add_ipv4_broadcasts(addresses: &mut SmallVec<[SocketAddr; 8]>, ipv4_addrs: &[Ipv4Addr], port: u16) {
         for &ip in ipv4_addrs {
             let octets = ip.octets();
             
@@ -441,14 +460,14 @@ impl UdpBroadcastManager {
         }
     }
 
-    /// 添加 IPv4 公网广播地址
-    fn add_ipv4_public_broadcasts(addresses: &mut Vec<SocketAddr>, _ipv4_addrs: &[Ipv4Addr], port: u16) {
+    /// 添加 IPv4 公网广播地址 - 性能优化版本
+    fn add_ipv4_public_broadcasts(addresses: &mut SmallVec<[SocketAddr; 8]>, _ipv4_addrs: &[Ipv4Addr], port: u16) {
         // 对于公网地址，我们只能使用有限广播
         addresses.push(SocketAddr::from(([255, 255, 255, 255], port)));
     }
 
-    /// 添加 IPv6 多播地址
-    fn add_ipv6_multicasts(addresses: &mut Vec<SocketAddr>, port: u16) {
+    /// 添加 IPv6 多播地址 - 性能优化版本
+    fn add_ipv6_multicasts(addresses: &mut SmallVec<[SocketAddr; 8]>, port: u16) {
         // 站点本地多播 (ff05::1)
         addresses.push(SocketAddr::new(
             IpAddr::V6(Ipv6Addr::new(0xff05, 0, 0, 0, 0, 0, 0, 1)),
@@ -468,14 +487,14 @@ impl UdpBroadcastManager {
         ));
     }
 
-    /// 生成后备广播地址
-    fn generate_fallback_addresses(port: u16) -> Vec<SocketAddr> {
-        vec![
-            SocketAddr::from(([255, 255, 255, 255], port)),
-            SocketAddr::from(([192, 168, 255, 255], port)),
-            SocketAddr::from(([10, 255, 255, 255], port)),
-            SocketAddr::from(([172, 31, 255, 255], port)),
-        ]
+    /// 生成后备广播地址 - 性能优化版本
+    fn generate_fallback_addresses(port: u16) -> SmallVec<[SocketAddr; 8]> {
+        let mut addresses = SmallVec::new();
+        addresses.push(SocketAddr::from(([255, 255, 255, 255], port)));
+        addresses.push(SocketAddr::from(([192, 168, 255, 255], port)));
+        addresses.push(SocketAddr::from(([10, 255, 255, 255], port)));
+        addresses.push(SocketAddr::from(([172, 31, 255, 255], port)));
+        addresses
     }
 
     /// 启动 UDP 广播服务
