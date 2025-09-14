@@ -1,0 +1,24 @@
+[package]
+name = "wdic-gateway"
+version = "0.1.0"
+edition = "2021"
+description = "基于 QUIC 的本地网关实现，提供 P2P 网络发现和注册表管理功能"
+authors = ["Local Gateway Team"]
+license = "MIT"
+homepage = "https://github.com/Local-gateway/gateway"
+repository = "https://github.com/Local-gateway/gateway"
+documentation = "https://docs.rs/wdic-gateway"
+keywords = ["gateway", "quic", "p2p", "network", "discovery"]
+categories = ["network-programming", "web-programming"]
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.99"
+chrono = { version = "0.4.42", features = ["serde"] }
+env_logger = "0.11.8"
+log = "0.4.28"
+quiche = "0.24.6"
+serde = { version = "1.0.221", features = ["derive"] }
+serde_json = "1.0.144"
+tokio = { version = "1.47.1", features = ["full"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
