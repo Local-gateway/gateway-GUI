@@ -106,9 +106,22 @@ jobs:
     - name: Patch BoringSSL processor name (i686)
       if: matrix.target == 'i686-pc-windows-msvc'
       run: |
-        $cmakeFile = "$(cargo home)\registry\src\index.crates.io-*\quiche-0.24.6\deps\boringssl\CMakeLists.txt"
-        (Get-Content $cmakeFile) -replace 'X86', 'x86' |
-        Set-Content $cmakeFile
+        # Get cargo home directory - use environment variable or default location
+        $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
+        $cmakeFile = "$cargoHome\registry\src\index.crates.io-*\quiche-0.24.6\deps\boringssl\CMakeLists.txt"
+        
+        # Check if the file exists before attempting to patch it
+        $cmakeFiles = Get-ChildItem -Path $cmakeFile -ErrorAction SilentlyContinue
+        if ($cmakeFiles) {
+          Write-Host "Found BoringSSL CMakeLists.txt file(s), applying X86 -> x86 patch..."
+          foreach ($file in $cmakeFiles) {
+            Write-Host "Patching: $($file.FullName)"
+            (Get-Content $file.FullName) -replace 'X86', 'x86' | Set-Content $file.FullName
+          }
+        } else {
+          Write-Host "Warning: BoringSSL CMakeLists.txt file not found at $cmakeFile"
+          Write-Host "This may not be an error if the file structure has changed."
+        }
  
     - name: Build
       env:
