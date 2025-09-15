@@ -30,7 +30,7 @@ jobs:
     - name: Setup Android NDK
       uses: nttld/setup-ndk@v1
       with:
-        ndk-version: r25c
+        ndk-version: r26d
         add-to-path: false
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -98,6 +98,12 @@ jobs:
       run: |
         # Additional environment setup for Android builds
         case ${{ matrix.target }} in
+          i686-linux-android)
+            # Workaround for i686 Android CPU feature detection issues
+            export RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,--defsym=__cpu_indicator_init=0 -C link-arg=-Wl,--defsym=__cpu_model=0"
+            # Additional linker flags to resolve CPU indicator symbols
+            export LDFLAGS="-Wl,--defsym=__cpu_indicator_init=0 -Wl,--defsym=__cpu_model=0"
+            ;;
           *android*)
             export RUSTFLAGS="-C target-feature=+crt-static"
             ;;
@@ -157,7 +163,7 @@ jobs:
     - name: Setup Android NDK (for HarmonyOS compatibility)
       uses: nttld/setup-ndk@v1
       with:
-        ndk-version: r25c
+        ndk-version: r26d
         add-to-path: false
     - name: Cache dependencies
       uses: actions/cache@v4
