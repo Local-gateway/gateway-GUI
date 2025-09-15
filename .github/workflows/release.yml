@@ -114,6 +114,12 @@ jobs:
         ndk-version: r25c
         add-to-path: false
     
+    - name: Install build dependencies (Android)
+      if: contains(matrix.target, 'android')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y nasm
+    
     - name: Setup Android environment
       if: contains(matrix.target, 'android')
       run: |
@@ -141,7 +147,7 @@ jobs:
       if: matrix.cross && runner.os == 'Linux' && !contains(matrix.target, 'android')
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+        sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf nasm
     
     - name: Build binary
       run: cargo build --release --target ${{ matrix.target }}
@@ -192,6 +198,11 @@ jobs:
       with:
         ndk-version: r25c
         add-to-path: false
+    
+    - name: Install build dependencies (HarmonyOS)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y nasm
     
     - name: Setup HarmonyOS environment
       run: |
