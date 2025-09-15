@@ -30,8 +30,6 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-benchmark-cargo-${{ hashFiles('**/Cargo.lock') }}
-    - name: Install Criterion
-      run: cargo install criterion
     - name: Run Benchmarks
       run: |
         cargo bench --bench performance_benchmarks > benchmark_results.txt

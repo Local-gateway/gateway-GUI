@@ -1,0 +1,38 @@
+# Cross-compilation configuration for Android and other targets
+
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android21-clang"
+
+[target.armv7-linux-androideabi]
+linker = "armv7a-linux-androideabi21-clang"
+
+[target.i686-linux-android]
+linker = "i686-linux-android21-clang"
+
+[target.x86_64-linux-android]
+linker = "x86_64-linux-android21-clang"
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+[target.armv7-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+
+# Build configuration
+[build]
+# Add jobs configuration for faster builds
+jobs = 4
+
+# Environment variables for Android builds
+[env]
+# These will be overridden by CI when NDK is available
+ANDROID_NDK_ROOT = { value = "", relative = false }
+
+# For quiche on Android - disable default features that may cause issues
+[target.aarch64-linux-android.dependencies]
+
+[target.armv7-linux-androideabi.dependencies]
+
+[target.i686-linux-android.dependencies]
+
+[target.x86_64-linux-android.dependencies]
