@@ -23,6 +23,8 @@ use std::net::SocketAddr;
 /// 测试序列化性能
 fn bench_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("序列化性能测试");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(15));
     
     // 测试不同大小的 UDP 令牌序列化
     for size in [10, 100, 1000].iter() {
@@ -33,15 +35,26 @@ fn bench_serialization(c: &mut Criterion) {
             search_id: Uuid::new_v4(),
         };
         
-        group.throughput(Throughput::Elements(*size as u64));
+        // 计算序列化后的字节大小
+        let serialized_size = serde_json::to_string(&token).unwrap().len();
+        group.throughput(Throughput::Bytes(serialized_size as u64));
         
         group.bench_with_input(
             BenchmarkId::new("serde_json序列化", size),
             &token,
             |b, token| {
-                b.iter(|| {
-                    black_box(serde_json::to_string(token).unwrap());
-                });
+                b.iter_batched(
+                    || token.clone(),
+                    |token| {
+                        let result = black_box(serde_json::to_string(&token).unwrap());
+                        // 输出性能数据
+                        if result.len() > 0 {
+                            black_box(result.len());
+                        }
+                        result
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
             },
         );
     }
@@ -303,6 +316,10 @@ fn bench_lockfree_registry(c: &mut Criterion) {
 fn bench_compression_ratio(c: &mut Criterion) {
     let mut group = c.benchmark_group("压缩比对比测试");
     group.sample_size(50);
+    group.measurement_time(Duration::from_secs(20));
+    
+    // 创建全局压缩管理器用于统计
+    let global_manager = CompressionManager::default();
     
     // 测试不同类型的数据
     let test_data = vec![
@@ -318,22 +335,71 @@ fn bench_compression_ratio(c: &mut Criterion) {
     
     for (data_type, data) in test_data {
         let manager = CompressionManager::default();
+        let original_size = data.len();
+        
+        group.throughput(Throughput::Bytes(original_size as u64));
         
         group.bench_function(format!("压缩-{}", data_type), |b| {
-            b.iter(|| {
-                let compressed = black_box(manager.compress(&data).unwrap());
-                let ratio = compressed.len() as f64 / data.len() as f64;
-                black_box(ratio);
-            });
+            b.iter_batched(
+                || data.clone(),
+                |data| {
+                    let compressed = black_box(manager.compress(&data).unwrap());
+                    let ratio = compressed.len() as f64 / data.len() as f64;
+                    
+                    // 输出压缩性能数据
+                    println!("压缩数据类型: {}, 原始大小: {} 字节, 压缩后: {} 字节, 压缩比: {:.2}%", 
+                             data_type, data.len(), compressed.len(), ratio * 100.0);
+                    
+                    black_box((compressed, ratio));
+                },
+                criterion::BatchSize::SmallInput,
+            );
         });
+        
+        // 测试解压性能
+        let compressed_data = manager.compress(&data).unwrap();
+        group.bench_function(format!("解压-{}", data_type), |b| {
+            b.iter_batched(
+                || compressed_data.clone(),
+                |compressed| {
+                    let decompressed = black_box(manager.decompress(&compressed).unwrap());
+                    assert_eq!(decompressed.len(), original_size);
+                    decompressed
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+        
+        // 更新全局统计
+        global_manager.compress(&data).unwrap();
+        global_manager.decompress(&compressed_data).unwrap();
     }
+    
+    // 显示压缩统计
+    let stats = global_manager.stats();
+    println!("压缩统计: 总压缩次数: {}, 总解压次数: {}, 平均压缩比: {:.2}%", 
+             stats.compress_count.load(std::sync::atomic::Ordering::Relaxed),
+             stats.decompress_count.load(std::sync::atomic::Ordering::Relaxed), 
+             stats.compression_ratio() * 100.0);
     
     group.finish();
 }
 
+/// 配置基准测试参数以显示性能数据
+fn configure_criterion() -> Criterion {
+    Criterion::default()
+        .with_output_color(true)
+        .measurement_time(Duration::from_secs(10))
+        .warm_up_time(Duration::from_secs(3))
+        .sample_size(100)
+        .significance_level(0.02)
+        .noise_threshold(0.05)
+}
+
 criterion_group!(
-    benches,
-    bench_serialization,
+    name = benches;
+    config = configure_criterion();
+    targets = bench_serialization,
     bench_deserialization,
     bench_directory_operations,
     bench_network_operations,
