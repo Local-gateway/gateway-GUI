@@ -38,15 +38,8 @@ crossbeam = "0.8.4"
 atomic_refcell = "0.1.13"
 dashmap = "6.1.0"
 
-# Target-specific dependency configurations for problematic targets
-[target.'cfg(target_os = "windows")'.dependencies]
-quiche = { version = "0.24.6", default-features = false, features = ["openssl"] }
-
-[target.'cfg(all(target_os = "android", target_arch = "x86"))'.dependencies]
-quiche = { version = "0.24.6", default-features = false, features = ["openssl"] }
-
-[target.'cfg(all(target_os = "android", target_arch = "x86_64"))'.dependencies]
-quiche = { version = "0.24.6", default-features = false, features = ["openssl"] }
+# Use boringssl-vendored for all platforms to avoid OpenSSL dependency issues
+# The vendored version builds BoringSSL from source and is more portable
 
 [dev-dependencies]
 criterion = "0.7.0"

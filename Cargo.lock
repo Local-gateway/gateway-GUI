@@ -1045,7 +1045,6 @@ dependencies = [
  "libm",
  "log",
  "octets",
- "pkg-config",
  "slab",
  "smallvec",
  "windows-sys 0.59.0",
