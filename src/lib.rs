@@ -59,7 +59,7 @@ mod boringssl_integration {
     fn test_quiche_boringssl_integration() {
         // Test that quiche can be initialized (which requires BoringSSL)
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-        
+
         // Set some basic configuration to verify the library works
         config.set_application_protos(&[b"test"]).unwrap();
         config.set_max_idle_timeout(5000);
@@ -71,7 +71,7 @@ mod boringssl_integration {
         config.set_initial_max_streams_bidi(100);
         config.set_initial_max_streams_uni(100);
         config.set_disable_active_migration(true);
-        
+
         // This would fail if BoringSSL wasn't properly linked
         println!("✅ quiche configuration created successfully!");
         println!("✅ BoringSSL integration is working correctly!");

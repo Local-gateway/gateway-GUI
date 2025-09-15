@@ -102,8 +102,8 @@ jobs:
       run: |
         # Additional environment setup for Android builds
         case ${{ matrix.target }} in
-          i686-linux-android)
-            # Workaround for i686 Android CPU feature detection issues
+          i686-linux-android|x86_64-linux-android)
+            # Workaround for x86/x86_64 Android CPU feature detection issues
             export RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,--defsym=__cpu_indicator_init=0 -C link-arg=-Wl,--defsym=__cpu_model=0"
             # Additional linker flags to resolve CPU indicator symbols
             export LDFLAGS="-Wl,--defsym=__cpu_indicator_init=0 -Wl,--defsym=__cpu_model=0"

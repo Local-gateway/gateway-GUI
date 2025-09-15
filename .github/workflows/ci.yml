@@ -100,6 +100,9 @@ jobs:
       env:
         # Set proper processor architecture for CMake on Windows i686
         CMAKE_SYSTEM_PROCESSOR: ${{ matrix.target == 'i686-pc-windows-msvc' && 'x86' || '' }}
+        # BoringSSL CMake workaround for i686 Windows  
+        CMAKE_GENERATOR_PLATFORM: ${{ matrix.target == 'i686-pc-windows-msvc' && 'Win32' || '' }}
+        CMAKE_GENERATOR_TOOLSET: ${{ matrix.target == 'i686-pc-windows-msvc' && 'host=x86' || '' }}
       run: cargo build --release --target ${{ matrix.target }}
     - name: Upload binary
       uses: actions/upload-artifact@v4
