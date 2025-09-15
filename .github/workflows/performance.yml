@@ -1,0 +1,215 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '0 2 * * *'  # Run daily at 2 AM UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-benchmark-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Install Criterion
+      run: cargo install criterion
+    - name: Run Benchmarks
+      run: |
+        cargo bench --bench performance_benchmarks > benchmark_results.txt
+        cat benchmark_results.txt
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: |
+          benchmark_results.txt
+          target/criterion/
+
+  stress-test:
+    name: Stress Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test:
+          - compression_stress
+          - registry_stress
+          - udp_broadcast_stress
+          - performance_monitor_stress
+          - gateway_concurrent_lifecycle
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-stress-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Run stress test ${{ matrix.test }}
+      run: |
+        cargo test --test stress_tests test_${{ matrix.test }} --release -- --nocapture
+        
+  memory-test:
+    name: Memory Usage Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-memory-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Install Valgrind
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y valgrind
+    - name: Build debug version
+      run: cargo build
+    - name: Run memory analysis
+      run: |
+        valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose target/debug/wdic-gateway --help > memory_report.txt 2>&1 || true
+        cat memory_report.txt
+    - name: Upload memory report
+      uses: actions/upload-artifact@v3
+      with:
+        name: memory-analysis
+        path: memory_report.txt
+
+  performance-comparison:
+    name: Performance Comparison
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+    - name: Checkout PR
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-pr-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Run PR benchmarks
+      run: |
+        cargo bench --bench performance_benchmarks > pr_benchmark.txt
+        echo "PR_BENCHMARK<<EOF" >> $GITHUB_ENV
+        cat pr_benchmark.txt >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+    - name: Checkout base branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+    - name: Run base benchmarks
+      run: |
+        cargo bench --bench performance_benchmarks > base_benchmark.txt
+        echo "BASE_BENCHMARK<<EOF" >> $GITHUB_ENV
+        cat base_benchmark.txt >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+    - name: Compare performance
+      run: |
+        echo "## Performance Comparison" > performance_comment.md
+        echo "" >> performance_comment.md
+        echo "### Base Branch Results:" >> performance_comment.md
+        echo '```' >> performance_comment.md
+        cat base_benchmark.txt >> performance_comment.md
+        echo '```' >> performance_comment.md
+        echo "" >> performance_comment.md
+        echo "### PR Results:" >> performance_comment.md
+        echo '```' >> performance_comment.md
+        cat pr_benchmark.txt >> performance_comment.md
+        echo '```' >> performance_comment.md
+    - name: Upload comparison
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-comparison
+        path: |
+          performance_comment.md
+          base_benchmark.txt
+          pr_benchmark.txt
+
+  integration-performance:
+    name: Integration Performance Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-integration-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Run integration tests with performance monitoring
+      run: |
+        cargo test --test integration_tests test_performance_benchmarks --release -- --nocapture > integration_perf.txt
+        cat integration_perf.txt
+    - name: Upload integration performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: integration-performance
+        path: integration_perf.txt
+
+  network-performance:
+    name: Network Performance Test
+    runs-on: ubuntu-latest
+    services:
+      test-network:
+        image: alpine:latest
+        options: --network-alias test-peer
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-network-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Run network performance tests
+      run: |
+        cargo test --test integration_tests test_udp_broadcast_functionality --release -- --nocapture > network_perf.txt
+        cargo test --test integration_tests test_p2p_discovery --release -- --nocapture >> network_perf.txt
+        cat network_perf.txt
+    - name: Upload network performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: network-performance
+        path: network_perf.txt

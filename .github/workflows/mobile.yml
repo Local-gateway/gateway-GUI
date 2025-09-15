@@ -1,0 +1,149 @@
+name: Mobile Builds
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-linux-android
+          - armv7-linux-androideabi
+          - i686-linux-android
+          - x86_64-linux-android
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r25c
+        add-to-path: false
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-android-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Setup Android environment
+      run: |
+        echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+        case ${{ matrix.target }} in
+          aarch64-linux-android)
+            echo "CC_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
+            echo "AR_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+            ;;
+          armv7-linux-androideabi)
+            echo "CC_armv7_linux_androideabi=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang" >> $GITHUB_ENV
+            echo "AR_armv7_linux_androideabi=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+            ;;
+          i686-linux-android)
+            echo "CC_i686_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang" >> $GITHUB_ENV
+            echo "AR_i686_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+            ;;
+          x86_64-linux-android)
+            echo "CC_x86_64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang" >> $GITHUB_ENV
+            echo "AR_x86_64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+            ;;
+        esac
+    - name: Build for Android
+      run: cargo build --release --target ${{ matrix.target }}
+    - name: Upload Android binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: wdic-gateway-${{ matrix.target }}
+        path: target/${{ matrix.target }}/release/wdic-gateway
+
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-apple-ios
+          - x86_64-apple-ios
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-ios-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Build for iOS
+      run: cargo build --release --target ${{ matrix.target }}
+    - name: Upload iOS binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: wdic-gateway-${{ matrix.target }}
+        path: target/${{ matrix.target }}/release/wdic-gateway
+
+  build-harmonyos:
+    name: Build HarmonyOS
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          # HarmonyOS uses Android-compatible targets
+          - aarch64-linux-android  # ARM64 for HarmonyOS
+          - armv7-linux-androideabi # ARM32 for HarmonyOS
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    - name: Setup Android NDK (for HarmonyOS compatibility)
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r25c
+        add-to-path: false
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-harmonyos-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Setup HarmonyOS environment
+      run: |
+        echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+        case ${{ matrix.target }} in
+          aarch64-linux-android)
+            echo "CC_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
+            echo "AR_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+            ;;
+          armv7-linux-androideabi)
+            echo "CC_armv7_linux_androideabi=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang" >> $GITHUB_ENV
+            echo "AR_armv7_linux_androideabi=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+            ;;
+        esac
+    - name: Build for HarmonyOS
+      run: cargo build --release --target ${{ matrix.target }}
+    - name: Upload HarmonyOS binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: wdic-gateway-harmonyos-${{ matrix.target }}
+        path: target/${{ matrix.target }}/release/wdic-gateway

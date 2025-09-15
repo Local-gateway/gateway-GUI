@@ -1,2 +1,68 @@
+# Rust
 /target
+**/*.rs.bk
+*.pdb
+
+# Build artifacts
 *.index
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Cache files
+.cache/
+*.cache
+
+# Test results
+benchmark_results.txt
+memory_report.txt
+*.coverage
+coverage/
+
+# Documentation builds
+book/
+doc/
+
+# Local development
+.env
+.env.local
+
+# Performance test artifacts
+criterion/
+target/criterion/
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Mobile build artifacts
+*.apk
+*.ipa
+*.aab

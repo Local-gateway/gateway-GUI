@@ -1,6 +1,37 @@
 # WDIC 网关 (WDIC Gateway)
 
-一个基于 QUIC 协议的本地网关实现，提供 P2P 网络发现和注册表管理功能。**新增基于 UDP 的 WDIC 协议自主广播功能**，所有网关都是一等公民。
+[![CI](https://github.com/Local-gateway/gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Local-gateway/gateway/actions/workflows/ci.yml)
+[![Mobile Builds](https://github.com/Local-gateway/gateway/actions/workflows/mobile.yml/badge.svg)](https://github.com/Local-gateway/gateway/actions/workflows/mobile.yml)
+[![Performance Tests](https://github.com/Local-gateway/gateway/actions/workflows/performance.yml/badge.svg)](https://github.com/Local-gateway/gateway/actions/workflows/performance.yml)
+[![Release](https://github.com/Local-gateway/gateway/actions/workflows/release.yml/badge.svg)](https://github.com/Local-gateway/gateway/actions/workflows/release.yml)
+
+一个基于 QUIC 协议的跨平台本地网关实现，提供 P2P 网络发现和注册表管理功能。**新增基于 UDP 的 WDIC 协议自主广播功能**，所有网关都是一等公民。支持多平台编译和自动化性能测试。
+
+## 平台支持
+
+WDIC Gateway 支持所有主流平台和架构的交叉编译：
+
+### 桌面平台
+- **Linux**: x86_64, aarch64, armv7
+- **Windows**: x86_64, i686
+- **macOS**: x86_64, Apple Silicon (aarch64)
+
+### 移动平台
+- **Android**: armv7, aarch64, i686, x86_64
+- **iOS**: aarch64 (设备), x86_64 (模拟器)
+- **HarmonyOS**: aarch64, armv7 (兼容 Android 目标)
+
+### 自动化构建
+
+所有平台的二进制文件通过 GitHub Actions 自动构建：
+- **持续集成**: 每次推送和 PR 自动构建和测试
+- **性能测试**: 自动化性能基准测试和压力测试
+- **发布构建**: 标签推送时自动构建所有平台版本
+- **每日测试**: 定时运行性能回归测试
+
+### 二进制下载
+
+预编译的二进制文件可在 [Releases](https://github.com/Local-gateway/gateway/releases) 页面下载。
 
 ## 功能特性
 
@@ -66,7 +97,7 @@
 - Rust 1.89.0 或更高版本
 - 网络权限（用于 UDP 广播）
 
-### 安装和运行
+### 从源码构建
 
 1. 克隆仓库：
 ```bash
@@ -87,6 +118,63 @@ cargo run
 或者设置日志级别：
 ```bash
 RUST_LOG=info cargo run
+```
+
+### 交叉编译
+
+项目支持多种目标平台的交叉编译：
+
+#### Android 平台
+```bash
+# 安装 Android NDK 和目标
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+# 设置环境变量（以 aarch64 为例）
+export ANDROID_NDK_ROOT=/path/to/android-ndk
+export CC_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+export AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+
+# 构建
+cargo build --target aarch64-linux-android --release
+```
+
+#### iOS 平台
+```bash
+# 安装目标
+rustup target add aarch64-apple-ios x86_64-apple-ios
+
+# 构建
+cargo build --target aarch64-apple-ios --release
+```
+
+#### Linux ARM 平台
+```bash
+# 安装交叉编译工具
+sudo apt-get install gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+
+# 安装目标
+rustup target add aarch64-unknown-linux-gnu armv7-unknown-linux-gnueabihf
+
+# 构建
+cargo build --target aarch64-unknown-linux-gnu --release
+```
+
+#### Windows 平台
+```bash
+# 安装目标
+rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc
+
+# 构建
+cargo build --target x86_64-pc-windows-msvc --release
+```
+
+#### macOS 平台
+```bash
+# 安装目标
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
+# 构建
+cargo build --target aarch64-apple-darwin --release
 ```
 
 ### 配置
@@ -307,6 +395,36 @@ manager.send_message(&message, target_addr).await?;
 
 ## 开发指南
 
+### CI/CD 工作流
+
+项目使用 GitHub Actions 实现完整的 CI/CD 流程：
+
+#### 1. 持续集成 (CI)
+- **触发条件**: 推送到 main/develop 分支或创建 PR
+- **任务**: 
+  - 代码质量检查 (clippy, fmt)
+  - 单元测试和集成测试
+  - 多平台构建验证
+
+#### 2. 移动平台构建 (Mobile)
+- **触发条件**: 推送到 main/develop 分支或手动触发
+- **平台**: Android (4个架构), iOS (2个架构), HarmonyOS (2个架构)
+- **产物**: 所有平台的二进制文件
+
+#### 3. 性能测试 (Performance)
+- **触发条件**: 推送、PR、每日定时 (UTC 2:00AM) 或手动触发
+- **测试类型**:
+  - 基准测试 (Criterion)
+  - 压力测试 (多线程、高负载)
+  - 内存使用分析 (Valgrind)
+  - 网络性能测试
+  - PR 性能对比
+
+#### 4. 发布构建 (Release)
+- **触发条件**: 推送版本标签或手动触发
+- **产物**: 所有支持平台的发布版本二进制文件
+- **目标**: 14个不同的平台/架构组合
+
 ### 运行演示
 
 ```bash
@@ -315,6 +433,12 @@ cargo run --example udp_demo
 
 # 运行基础网关演示
 cargo run --example basic_usage
+
+# 运行缓存演示
+cargo run --example cache_demo
+
+# 运行性能演示
+cargo run --example performance_demo
 ```
 
 ### 运行测试
@@ -329,8 +453,27 @@ cargo test udp_protocol
 # 运行网关测试
 cargo test gateway
 
+# 运行压力测试
+cargo test --test stress_tests
+
+# 运行集成测试
+cargo test --test integration_tests
+
 # 运行测试并显示输出
 cargo test -- --nocapture
+```
+
+### 性能基准测试
+
+```bash
+# 运行所有基准测试
+cargo bench
+
+# 运行特定基准测试
+cargo bench --bench performance_benchmarks
+
+# 生成基准测试报告
+cargo bench --bench performance_benchmarks -- --output-format html
 ```
 
 ### 生成文档
@@ -338,11 +481,12 @@ cargo test -- --nocapture
 ```bash
 # 生成 API 文档
 cargo doc --no-deps --open
+
+# 生成所有依赖的文档
+cargo doc --open
 ```
 
-### 代码风格
-
-项目遵循 Rust 标准代码风格：
+### 代码质量检查
 
 ```bash
 # 格式化代码
@@ -350,6 +494,27 @@ cargo fmt
 
 # 检查代码质量
 cargo clippy
+
+# 严格模式检查
+cargo clippy -- -D warnings
+
+# 检查未使用的依赖
+cargo machete
+```
+
+### 内存和性能分析
+
+```bash
+# 使用 Valgrind 进行内存检查
+valgrind --tool=memcheck --leak-check=full target/debug/wdic-gateway
+
+# 使用 perf 进行性能分析
+perf record target/release/wdic-gateway
+perf report
+
+# 使用 flamegraph 生成火焰图
+cargo install flamegraph
+cargo flamegraph --bin wdic-gateway
 ```
 
 ### 添加新功能
@@ -365,6 +530,29 @@ cargo clippy
 - **高并发**: 异步 I/O 支持大量并发连接
 - **内存效率**: 精心设计的数据结构，最小化内存占用
 - **网络优化**: 智能广播策略，减少网络流量
+- **跨平台优化**: 针对不同平台和架构的性能优化
+
+### 性能监控
+
+项目内置完整的性能监控系统：
+
+- **延迟监控**: 实时监控网络延迟和响应时间
+- **吞吐量监控**: 监控数据传输速率和处理能力
+- **内存使用监控**: 跟踪内存分配和释放
+- **连接状态监控**: 监控活跃连接数和连接质量
+- **错误率监控**: 统计各种类型的错误和异常
+
+### 基准测试结果
+
+项目包含全面的基准测试套件，涵盖：
+
+- **网络性能**: UDP 广播、QUIC 连接、P2P 发现
+- **数据处理**: 压缩、解压、序列化、反序列化
+- **缓存性能**: 缓存命中率、查询速度、清理效率
+- **并发性能**: 多线程处理、异步 I/O、锁竞争
+- **文件操作**: 目录索引、文件搜索、传输速度
+
+所有基准测试结果通过 GitHub Actions 自动生成和发布。
 
 ## 安全考虑
 
@@ -381,18 +569,130 @@ cargo clippy
    ```bash
    # 检查端口占用
    netstat -tulpn | grep 55555
+   # 或者使用 ss
+   ss -tulpn | grep 55555
    ```
 
 2. **广播权限**
    ```bash
    # 确保程序有网络广播权限
    # 在某些环境中可能需要管理员权限
+   sudo setcap cap_net_raw,cap_net_admin=eip target/release/wdic-gateway
    ```
 
 3. **防火墙配置**
    ```bash
-   # 确保 UDP 55555 端口开放
+   # Ubuntu/Debian
    sudo ufw allow 55555/udp
+   sudo ufw allow 55556/udp
+   
+   # CentOS/RHEL
+   sudo firewall-cmd --permanent --add-port=55555/udp
+   sudo firewall-cmd --permanent --add-port=55556/udp
+   sudo firewall-cmd --reload
+   
+   # Windows
+   netsh advfirewall firewall add rule name="WDIC Gateway UDP" dir=in action=allow protocol=UDP localport=55555-55556
+   ```
+
+4. **交叉编译问题**
+   ```bash
+   # Android 交叉编译失败
+   export ANDROID_NDK_ROOT=/path/to/ndk
+   export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+   
+   # iOS 交叉编译失败 (需要 macOS)
+   xcode-select --install
+   
+   # Linux ARM 交叉编译失败
+   sudo apt-get install gcc-multilib gcc-aarch64-linux-gnu
+   ```
+
+5. **性能问题诊断**
+   ```bash
+   # 启用详细日志
+   RUST_LOG=debug cargo run
+   
+   # 运行性能分析
+   cargo bench --bench performance_benchmarks
+   
+   # 内存泄漏检查
+   valgrind --tool=memcheck --leak-check=full target/debug/wdic-gateway
+   ```
+
+6. **网络连接问题**
+   ```bash
+   # 检查网络接口
+   ip addr show
+   
+   # 测试广播连通性
+   cargo test --test integration_tests test_udp_broadcast_functionality -- --nocapture
+   
+   # 检查 QUIC 连接
+   cargo test --test integration_tests test_p2p_discovery -- --nocapture
+   ```
+
+### 构建问题
+
+1. **依赖下载失败**
+   ```bash
+   # 使用国内镜像源
+   echo '[source.crates-io]
+   replace-with = "rsproxy"
+   [source.rsproxy]
+   registry = "https://rsproxy.cn/crates.io-index"' >> ~/.cargo/config.toml
+   ```
+
+2. **链接错误**
+   ```bash
+   # 安装必要的系统依赖
+   # Ubuntu/Debian
+   sudo apt-get install build-essential pkg-config libssl-dev
+   
+   # CentOS/RHEL
+   sudo yum groupinstall "Development Tools"
+   sudo yum install pkgconfig openssl-devel
+   
+   # macOS
+   xcode-select --install
+   brew install pkg-config openssl
+   ```
+
+3. **目标平台不支持**
+   ```bash
+   # 查看所有可用目标
+   rustup target list
+   
+   # 安装特定目标
+   rustup target add aarch64-unknown-linux-gnu
+   ```
+
+### 调试技巧
+
+1. **启用调试日志**
+   ```bash
+   export RUST_LOG=wdic_gateway=debug
+   cargo run
+   ```
+
+2. **使用调试器**
+   ```bash
+   # GDB
+   cargo build
+   gdb target/debug/wdic-gateway
+   
+   # LLDB (macOS)
+   cargo build
+   lldb target/debug/wdic-gateway
+   ```
+
+3. **网络抓包分析**
+   ```bash
+   # 使用 tcpdump
+   sudo tcpdump -i any -w capture.pcap port 55555 or port 55556
+   
+   # 使用 Wireshark
+   wireshark -i any -f "port 55555 or port 55556"
    ```
 
 ## 贡献指南
@@ -408,6 +708,29 @@ cargo clippy
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
 ## 更新日志
+
+### v0.3.0 (计划中)
+
+#### 新增功能
+- 🏗️ **跨平台构建系统**: 支持 14 种平台/架构组合的自动化构建
+- 🤖 **CI/CD 工作流**: 完整的 GitHub Actions 工作流程
+- 📊 **自动化性能测试**: 持续性能监控和回归测试
+- 📱 **移动平台支持**: Android、iOS、HarmonyOS 完整支持
+- 🔄 **每日构建**: 定时构建和测试确保代码质量
+- 📈 **性能对比**: PR 自动性能对比和分析
+- 🛠️ **开发工具链**: 完整的开发和调试工具集成
+
+#### 技术改进
+- 跨平台编译优化和构建脚本
+- 内存使用分析和优化工具集成
+- 网络性能基准测试套件
+- 多架构二进制文件自动发布
+- 详细的故障排除和调试指南
+
+#### API 变更
+- 保持 v0.2.0 API 完全兼容
+- 新增平台特定的配置选项
+- 增强性能监控和度量 API
 
 ### v0.2.0
 
