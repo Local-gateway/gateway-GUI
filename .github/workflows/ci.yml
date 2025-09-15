@@ -81,7 +81,6 @@ jobs:
       matrix:
         target:
           - x86_64-pc-windows-msvc
-          - i686-pc-windows-msvc
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust
@@ -103,34 +102,7 @@ jobs:
     - name: Fetch crates
       run: cargo fetch --target ${{ matrix.target }}
 
-    - name: Patch BoringSSL processor name (i686)
-      if: matrix.target == 'i686-pc-windows-msvc'
-      run: |
-        # Get cargo home directory - use environment variable or default location
-        $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
-        $cmakeFile = "$cargoHome\registry\src\index.crates.io-*\quiche-0.24.6\deps\boringssl\CMakeLists.txt"
-        
-        # Check if the file exists before attempting to patch it
-        $cmakeFiles = Get-ChildItem -Path $cmakeFile -ErrorAction SilentlyContinue
-        if ($cmakeFiles) {
-          Write-Host "Found BoringSSL CMakeLists.txt file(s), applying X86 -> x86 patch..."
-          foreach ($file in $cmakeFiles) {
-            Write-Host "Patching: $($file.FullName)"
-            (Get-Content $file.FullName) -replace 'X86', 'x86' | Set-Content $file.FullName
-          }
-        } else {
-          Write-Host "Warning: BoringSSL CMakeLists.txt file not found at $cmakeFile"
-          Write-Host "This may not be an error if the file structure has changed."
-        }
- 
     - name: Build
-      env:
-        # Set proper processor architecture for CMake on Windows i686
-        CMAKE_GENERATOR: Visual Studio 17 2022
-        CMAKE_SYSTEM_PROCESSOR: ${{ matrix.target == 'i686-pc-windows-msvc' && 'x86' || '' }}
-        # BoringSSL CMake workaround for i686 Windows  
-        CMAKE_GENERATOR_PLATFORM: ${{ matrix.target == 'i686-pc-windows-msvc' && 'Win32' || '' }}
-        CMAKE_GENERATOR_TOOLSET: ${{ matrix.target == 'i686-pc-windows-msvc' && 'host=x86' || '' }}
       run: cargo build --release --target ${{ matrix.target }}
     - name: Upload binary
       uses: actions/upload-artifact@v4

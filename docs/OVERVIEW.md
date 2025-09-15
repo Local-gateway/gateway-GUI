@@ -28,7 +28,7 @@ WDIC Gateway 是一个高性能、跨平台的本地网关实现，基于 QUIC +
 
 ### 桌面平台
 - **Linux**: x86_64, aarch64, armv7
-- **Windows**: x86_64, i686
+- **Windows**: x86_64
 - **macOS**: x86_64, Apple Silicon (aarch64)
 
 ### 移动平台

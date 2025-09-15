@@ -6,7 +6,7 @@
 
 ### 桌面平台
 - **Linux**: x86_64, aarch64, armv7
-- **Windows**: x86_64, i686  
+- **Windows**: x86_64
 - **macOS**: x86_64, Apple Silicon (aarch64)
 
 ### 移动平台
@@ -113,11 +113,9 @@ sudo apt-get install gcc-mingw-w64
 
 # 2. 安装 Rust 目标
 rustup target add x86_64-pc-windows-gnu
-rustup target add i686-pc-windows-gnu
 
 # 3. 构建
 cargo build --target x86_64-pc-windows-gnu --release
-cargo build --target i686-pc-windows-gnu --release
 ```
 
 ### macOS (在 Linux 上交叉编译)
@@ -170,7 +168,6 @@ TARGETS=(
     "aarch64-unknown-linux-gnu" 
     "armv7-unknown-linux-gnueabihf"
     "x86_64-pc-windows-msvc"
-    "i686-pc-windows-msvc"
     "x86_64-apple-darwin"
     "aarch64-apple-darwin"
     "aarch64-linux-android"

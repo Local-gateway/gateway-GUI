@@ -48,10 +48,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset_name: wdic-gateway-windows-x86_64.exe
             cross: false
-          - os: windows-latest
-            target: i686-pc-windows-msvc
-            asset_name: wdic-gateway-windows-i686.exe
-            cross: false
           
           # macOS targets
           - os: macos-latest

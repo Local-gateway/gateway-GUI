@@ -13,7 +13,7 @@ WDIC Gateway 支持所有主流平台和架构的交叉编译：
 
 ### 桌面平台
 - **Linux**: x86_64, aarch64, armv7
-- **Windows**: x86_64, i686
+- **Windows**: x86_64
 - **macOS**: x86_64, Apple Silicon (aarch64)
 
 ### 移动平台
@@ -162,7 +162,7 @@ cargo build --target aarch64-unknown-linux-gnu --release
 #### Windows 平台
 ```bash
 # 安装目标
-rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc
 
 # 构建
 cargo build --target x86_64-pc-windows-msvc --release
@@ -423,7 +423,7 @@ manager.send_message(&message, target_addr).await?;
 #### 4. 发布构建 (Release)
 - **触发条件**: 推送版本标签或手动触发
 - **产物**: 所有支持平台的发布版本二进制文件
-- **目标**: 14个不同的平台/架构组合
+- **目标**: 13个不同的平台/架构组合
 
 ### 运行演示
 
@@ -712,7 +712,7 @@ cargo flamegraph --bin wdic-gateway
 ### v0.3.0 (计划中)
 
 #### 新增功能
-- 🏗️ **跨平台构建系统**: 支持 14 种平台/架构组合的自动化构建
+- 🏗️ **跨平台构建系统**: 支持 13 种平台/架构组合的自动化构建
 - 🤖 **CI/CD 工作流**: 完整的 GitHub Actions 工作流程
 - 📊 **自动化性能测试**: 持续性能监控和回归测试
 - 📱 **移动平台支持**: Android、iOS、HarmonyOS 完整支持
@@ -726,11 +726,13 @@ cargo flamegraph --bin wdic-gateway
 - 网络性能基准测试套件
 - 多架构二进制文件自动发布
 - 详细的故障排除和调试指南
+- 移除 Windows 32位 (i686) 支持，简化构建系统
 
 #### API 变更
 - 保持 v0.2.0 API 完全兼容
 - 新增平台特定的配置选项
 - 增强性能监控和度量 API
+- 优化构建配置和依赖管理
 
 ### v0.2.0
 

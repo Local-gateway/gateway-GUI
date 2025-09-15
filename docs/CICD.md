@@ -60,12 +60,10 @@ strategy:
   matrix:
     target:
       - x86_64-pc-windows-msvc
-      - i686-pc-windows-msvc
 ```
 
 **构建产物:**
 - Windows x64 可执行文件
-- Windows x86 可执行文件
 
 #### 4. macOS 平台构建 (build-macos)
 ```yaml
@@ -238,7 +236,7 @@ strategy:
 
 **支持平台:**
 - Linux: x86_64, aarch64, armv7
-- Windows: x86_64, i686
+- Windows: x86_64
 - macOS: x86_64, aarch64
 - Android: aarch64, armv7, i686, x86_64
 - iOS: aarch64, x86_64
