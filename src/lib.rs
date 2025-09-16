@@ -32,6 +32,7 @@ pub mod network;
 pub mod performance;
 pub mod protocol;
 pub mod registry;
+pub mod security;
 pub mod tls;
 pub mod udp_protocol;
 
@@ -47,6 +48,7 @@ pub use performance::{
 };
 pub use protocol::WdicProtocol;
 pub use registry::{Registry, RegistryEntry};
+pub use security::{PathValidator, SecureFileReader, SearchResultFilter};
 pub use tls::{MtlsConfig, TlsManager, TlsVersion, VerifyMode};
 pub use udp_protocol::{
     DirectoryEntry, DirectoryIndex, UdpBroadcastEvent, UdpBroadcastManager, UdpToken,
