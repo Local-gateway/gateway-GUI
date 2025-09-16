@@ -5,6 +5,7 @@
 
 # Build artifacts
 *.index
+indices/
 *.o
 *.so
 *.dylib

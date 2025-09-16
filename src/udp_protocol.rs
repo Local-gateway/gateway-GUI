@@ -6,16 +6,18 @@
 use ahash::AHashMap;
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::Duration;
 use uuid::Uuid;
 
 use crate::protocol::WdicMessage;
+use crate::security::{PathValidator, SecureFileReader, SearchResultFilter};
 
 /// UDP 广播令牌类型
 /// 性能优化：使用 SmallVec 减少小集合的堆分配
@@ -142,18 +144,81 @@ impl DirectoryIndex {
     pub fn generate(path: &str) -> Result<Self> {
         let mut entries = Vec::new();
 
+        // 创建路径验证器，只允许访问指定的根目录
+        let validator = PathValidator::new(vec![]);
+        let normalized_path = validator.validate_and_normalize(path)?;
+
         fn scan_directory(
             dir_path: &std::path::Path,
             entries: &mut Vec<DirectoryEntry>,
+            validator: &PathValidator,
+            current_depth: usize,
         ) -> Result<()> {
+            // 检查目录深度，防止无限递归
+            const MAX_SCAN_DEPTH: usize = 20;
+            if current_depth > MAX_SCAN_DEPTH {
+                warn!("目录扫描深度超过限制 {} 层，跳过: {}", MAX_SCAN_DEPTH, dir_path.display());
+                return Ok(());
+            }
+
+            // 验证目录深度
+            validator.validate_directory_depth(dir_path)?;
+
             if !dir_path.exists() {
                 return Err(anyhow::anyhow!("目录不存在: {}", dir_path.display()));
             }
 
+            if !dir_path.is_dir() {
+                return Err(anyhow::anyhow!("路径不是目录: {}", dir_path.display()));
+            }
+
+            // 限制每个目录的最大条目数，防止内存耗尽
+            const MAX_ENTRIES_PER_DIR: usize = 10000;
+            let mut dir_entry_count = 0;
+
             for entry in std::fs::read_dir(dir_path)? {
+                if dir_entry_count >= MAX_ENTRIES_PER_DIR {
+                    warn!("目录 {} 包含过多文件，已达到限制 {} 个", dir_path.display(), MAX_ENTRIES_PER_DIR);
+                    break;
+                }
+
                 let entry = entry?;
                 let path = entry.path();
                 let metadata = entry.metadata()?;
+
+                // 跳过符号链接，防止循环引用
+                if metadata.file_type().is_symlink() {
+                    debug!("跳过符号链接: {}", path.display());
+                    continue;
+                }
+
+                // 检查是否为隐藏目录或文件，如果是则跳过
+                if let Some(name) = path.file_name() {
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with('.') {
+                        if metadata.is_dir() {
+                            debug!("跳过隐藏目录: {}", path.display());
+                            continue;
+                        } else {
+                            // 对于隐藏文件，检查是否在允许列表中
+                            let allowed_hidden = [".gitignore", ".env.example", ".dockerignore"];
+                            if !allowed_hidden.iter().any(|&allowed| name_str == allowed) {
+                                debug!("跳过隐藏文件: {}", path.display());
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    // 跳过系统目录
+                    if metadata.is_dir() && (
+                        name_str == "System Volume Information" ||
+                        name_str == "$RECYCLE.BIN" ||
+                        name_str == "Thumbs.db"
+                    ) {
+                        debug!("跳过系统目录: {}", path.display());
+                        continue;
+                    }
+                }
 
                 let dir_entry = DirectoryEntry {
                     path: path.to_string_lossy().to_string(),
@@ -169,18 +234,24 @@ impl DirectoryIndex {
                 };
 
                 entries.push(dir_entry);
+                dir_entry_count += 1;
 
                 // 递归扫描子目录
                 if metadata.is_dir() {
-                    scan_directory(&path, entries)?;
+                    if let Err(e) = scan_directory(&path, entries, validator, current_depth + 1) {
+                        warn!("扫描子目录失败 {}: {}", path.display(), e);
+                        // 继续扫描其他目录，不中断整个过程
+                    }
                 }
             }
 
             Ok(())
         }
 
-        let root_path = std::path::Path::new(path);
-        scan_directory(root_path, &mut entries)?;
+        let root_path = normalized_path.as_path();
+        scan_directory(root_path, &mut entries, &validator, 0)?;
+
+        info!("目录索引生成完成，共扫描 {} 个条目", entries.len());
 
         Ok(Self {
             root_path: path.to_string(),
@@ -204,7 +275,7 @@ impl DirectoryIndex {
             keywords.iter().map(|k| k.to_lowercase()).collect();
 
         // 使用更高效的过滤和收集方式
-        let mut results = SmallVec::new();
+        let mut results: SmallVec<[String; 8]> = SmallVec::new();
 
         for entry in &self.entries {
             let path_lower = entry.path.to_lowercase();
@@ -220,7 +291,12 @@ impl DirectoryIndex {
             }
         }
 
-        results
+        // 应用安全过滤器
+        let filter = SearchResultFilter::new();
+        let filtered_results: Vec<String> = filter.filter_results(results.into_iter().collect());
+        
+        // 转换回 SmallVec
+        filtered_results.into_iter().collect()
     }
 
     /// 保存索引到文件 - 性能优化版本（使用JSON以确保兼容性）
@@ -281,6 +357,8 @@ pub struct UdpBroadcastManager {
     mounted_directories: Arc<RwLock<AHashMap<String, DirectoryIndex>>>,
     /// 运行状态
     running: Arc<Mutex<bool>>,
+    /// 安全文件读取器
+    secure_file_reader: Arc<SecureFileReader>,
 }
 
 impl UdpBroadcastManager {
@@ -303,6 +381,13 @@ impl UdpBroadcastManager {
         // 生成广播地址
         let broadcast_addresses = Self::generate_broadcast_addresses(local_addr);
 
+        // 创建安全文件读取器，初始为空的允许根目录列表
+        // 挂载目录时会更新允许的根目录
+        let secure_file_reader = Arc::new(SecureFileReader::new(
+            vec![], // 初始为空，挂载目录时更新
+            10 * 1024 * 1024, // 10MB 文件大小限制
+        ));
+
         Ok(Self {
             local_addr,
             udp_socket: Arc::new(udp_socket),
@@ -311,6 +396,7 @@ impl UdpBroadcastManager {
             broadcast_addresses,
             mounted_directories: Arc::new(RwLock::new(AHashMap::new())),
             running: Arc::new(Mutex::new(false)),
+            secure_file_reader,
         })
     }
 
@@ -664,17 +750,68 @@ impl UdpBroadcastManager {
     pub async fn mount_directory(&self, name: String, path: String) -> Result<()> {
         info!("开始挂载目录: {} -> {}", name, path);
 
+        // 验证挂载点名称
+        if name.is_empty() || name.len() > 255 {
+            return Err(anyhow::anyhow!("挂载点名称无效: 长度必须在 1-255 字符之间"));
+        }
+
+        // 检查挂载点名称是否包含非法字符
+        if name.contains('/') || name.contains('\\') || name.contains(':') || name.contains('<') ||
+           name.contains('>') || name.contains('|') || name.contains('?') || name.contains('*') {
+            return Err(anyhow::anyhow!("挂载点名称包含非法字符: {}", name));
+        }
+
+        // 验证路径安全性
+        let validator = PathValidator::new(vec![]);
+        let normalized_path = validator.validate_and_normalize(&path)?;
+
+        // 检查路径是否存在且为目录
+        if !normalized_path.exists() {
+            return Err(anyhow::anyhow!("目录不存在: {}", normalized_path.display()));
+        }
+
+        if !normalized_path.is_dir() {
+            return Err(anyhow::anyhow!("路径不是目录: {}", normalized_path.display()));
+        }
+
+        // 检查是否已经挂载了同名的挂载点
+        {
+            let mounted = self.mounted_directories.read().await;
+            if mounted.contains_key(&name) {
+                return Err(anyhow::anyhow!("挂载点已存在: {}", name));
+            }
+        }
+
+        // 生成目录索引
         let index = DirectoryIndex::generate(&path)?;
 
-        // 保存索引文件
-        let index_file = format!("{}.index", name);
-        index.save_to_file(&index_file)?;
+        // 保存索引文件到安全位置
+        let index_dir = PathBuf::from("./indices");
+        if !index_dir.exists() {
+            std::fs::create_dir_all(&index_dir)
+                .map_err(|e| anyhow::anyhow!("创建索引目录失败: {}", e))?;
+        }
+
+        let index_file = index_dir.join(format!("{}.index", name));
+        index.save_to_file(&index_file.to_string_lossy())?;
 
         // 添加到挂载点
         {
             let mut mounted = self.mounted_directories.write().await;
             mounted.insert(name.clone(), index);
         }
+
+        // 更新安全文件读取器的允许根目录列表
+        let mounted_dirs = self.get_mounted_directories().await;
+        let mut allowed_roots = Vec::new();
+        for mount_name in mounted_dirs {
+            if let Some(index) = self.mounted_directories.read().await.get(&mount_name) {
+                allowed_roots.push(PathBuf::from(&index.root_path));
+            }
+        }
+
+        // 由于 SecureFileReader 不可变，我们在读取文件时会重新创建
+        // 这是一个权衡，确保每次文件访问都使用最新的安全配置
 
         info!("目录挂载成功: {}", name);
         Ok(())
@@ -734,7 +871,43 @@ impl UdpBroadcastManager {
     ///
     /// 文件内容（Base64 编码）
     pub async fn read_file(&self, file_path: &str) -> Result<String> {
-        let data = std::fs::read(file_path).map_err(|e| anyhow::anyhow!("读取文件失败: {}", e))?;
+        // 获取当前挂载的根目录列表
+        let mounted_dirs = self.get_mounted_directories().await;
+        let mut allowed_roots = Vec::new();
+        
+        {
+            let mounted = self.mounted_directories.read().await;
+            for mount_name in &mounted_dirs {
+                if let Some(index) = mounted.get(mount_name) {
+                    allowed_roots.push(PathBuf::from(&index.root_path));
+                }
+            }
+        }
+
+        // 创建安全文件读取器
+        let secure_reader = SecureFileReader::new(
+            allowed_roots,
+            10 * 1024 * 1024, // 10MB 文件大小限制
+        );
+
+        // 安全地读取文件
+        let data = secure_reader.read_file(file_path)
+            .map_err(|e| anyhow::anyhow!("安全文件读取失败: {}", e))?;
+
+        // 检查文件是否在挂载的目录索引中
+        let file_found_in_index = {
+            let mounted = self.mounted_directories.read().await;
+            mounted.values().any(|index| {
+                index.entries.iter().any(|entry| {
+                    entry.path == file_path && !entry.is_dir
+                })
+            })
+        };
+
+        if !file_found_in_index {
+            warn!("尝试访问未在索引中的文件: {}", file_path);
+            return Err(anyhow::anyhow!("文件访问被拒绝: 文件不在任何挂载的目录索引中"));
+        }
 
         Ok(general_purpose::STANDARD.encode(&data))
     }
