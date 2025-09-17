@@ -46,7 +46,7 @@ WDIC Gateway 支持所有主流平台和架构的交叉编译：
 - 📝 **注册表管理**: 自动维护网络中其他网关的注册信息
 - 📡 **P2P 广播**: 局域网内的自动发现和广播功能
 - 🔄 **实时同步**: 网关间的实时状态同步和心跳检测
-- 🏠 **本地服务**: 在 55555 端口提供网关服务
+- 🏠 **本地服务**: 在 55555 端口提供网关服务，UDP广播固定使用 55556 端口
 - 🧪 **完整测试**: 100% 测试驱动开发，确保代码质量
 
 ## 架构设计
@@ -176,6 +176,40 @@ rustup target add x86_64-apple-darwin aarch64-apple-darwin
 # 构建
 cargo build --target aarch64-apple-darwin --release
 ```
+
+## UDP 固定端口功能
+
+从 v0.2.1 版本开始，WDIC Gateway 使用固定端口 **55556** 进行 UDP 广播通信：
+
+### 主要特性
+- **固定端口**: 所有 UDP 通信统一使用端口 55556
+- **智能实例管理**: 自动检测端口占用，支持连接到现有实例
+- **错误处理**: 清晰的错误提示和处理机制
+
+### 使用方法
+```rust
+use wdic_gateway::udp_protocol::UdpBroadcastManager;
+
+// 推荐：创建或连接到现有实例
+let manager = UdpBroadcastManager::new_or_connect().await?;
+
+// 指定IP地址
+use std::net::{IpAddr, Ipv4Addr};
+let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+let manager = UdpBroadcastManager::new_or_connect_with_ip(ip).await?;
+```
+
+### 网络配置
+确保防火墙允许 UDP 端口 55556：
+```bash
+# Windows
+netsh advfirewall firewall add rule name="WDIC UDP" dir=in action=allow protocol=UDP localport=55556
+
+# Linux
+sudo ufw allow 55556/udp
+```
+
+详细说明请参考 [UDP_FIXED_PORT.md](UDP_FIXED_PORT.md)。
 
 ### 配置
 

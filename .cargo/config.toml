@@ -37,3 +37,5 @@ jobs = 4
 # Environment variables
 [env]
 ANDROID_NDK_ROOT = { value = "", relative = false }
+# 设置测试默认使用单线程以避免竞态条件
+RUST_TEST_THREADS = "1"

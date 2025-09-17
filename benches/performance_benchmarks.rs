@@ -22,7 +22,7 @@ fn bench_serialization(c: &mut Criterion) {
 
     // 测试不同大小的 UDP 令牌序列化
     for size in [10, 100, 1000].iter() {
-        let keywords: Vec<String> = (0..*size).map(|i| format!("keyword{}", i)).collect();
+        let keywords: Vec<String> = (0..*size).map(|i| format!("keyword{i}")).collect();
         let token = UdpToken::DirectorySearch {
             searcher_id: Uuid::new_v4(),
             keywords: keywords.into(),
@@ -42,7 +42,7 @@ fn bench_serialization(c: &mut Criterion) {
                     |token| {
                         let result = black_box(serde_json::to_string(&token).unwrap());
                         // 输出性能数据
-                        if result.len() > 0 {
+                        if !result.is_empty() {
                             black_box(result.len());
                         }
                         result
@@ -61,7 +61,7 @@ fn bench_deserialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("反序列化性能测试");
 
     for size in [10, 100, 1000].iter() {
-        let keywords: Vec<String> = (0..*size).map(|i| format!("keyword{}", i)).collect();
+        let keywords: Vec<String> = (0..*size).map(|i| format!("keyword{i}")).collect();
         let token = UdpToken::DirectorySearch {
             searcher_id: Uuid::new_v4(),
             keywords: keywords.into(),
@@ -99,7 +99,7 @@ fn bench_directory_operations(c: &mut Criterion) {
 
     for i in 0..1000 {
         index.entries.push(DirectoryEntry {
-            path: format!("file{}.txt", i),
+            path: format!("file{i}.txt"),
             size: i * 1024,
             is_dir: false,
             modified: chrono::Utc::now(),
@@ -163,7 +163,7 @@ fn bench_stress_testing(c: &mut Criterion) {
             for i in 0..1000 {
                 let token = UdpToken::InfoMessage {
                     sender_id: Uuid::new_v4(),
-                    content: format!("压力测试消息 {}", i),
+                    content: format!("压力测试消息 {i}"),
                     message_id: Uuid::new_v4(),
                 };
                 tokens.push(black_box(serde_json::to_string(&token).unwrap()));
@@ -181,7 +181,7 @@ fn bench_stress_testing(c: &mut Criterion) {
 
         for i in 0..10000 {
             index.entries.push(DirectoryEntry {
-                path: format!("stress_file_{}.dat", i),
+                path: format!("stress_file_{i}.dat"),
                 size: i * 512,
                 is_dir: false,
                 modified: chrono::Utc::now(),
@@ -226,7 +226,7 @@ fn bench_compression_performance(c: &mut Criterion) {
             let manager = CompressionManager::new(config);
 
             group.bench_with_input(
-                BenchmarkId::new(format!("压缩-{}", name), size),
+                BenchmarkId::new(format!("压缩-{name}"), size),
                 &data,
                 |b, data| {
                     b.iter(|| {
@@ -238,7 +238,7 @@ fn bench_compression_performance(c: &mut Criterion) {
             // 先压缩数据用于解压测试
             let compressed_data = manager.compress(&data).unwrap();
             group.bench_with_input(
-                BenchmarkId::new(format!("解压-{}", name), size),
+                BenchmarkId::new(format!("解压-{name}"), size),
                 &compressed_data,
                 |b, compressed| {
                     b.iter(|| {
@@ -264,7 +264,7 @@ fn bench_lockfree_registry(c: &mut Criterion) {
     // 预填充一些数据
     for i in 0..1000 {
         let entry = RegistryEntry::new(
-            format!("gateway_{}", i),
+            format!("gateway_{i}"),
             SocketAddr::from(([192, 168, 1, (i % 255) as u8], 55555 + (i % 1000) as u16)),
         );
         registry.add_or_update(entry);
@@ -274,7 +274,7 @@ fn bench_lockfree_registry(c: &mut Criterion) {
         b.iter(|| {
             for i in 0..100 {
                 let entry = RegistryEntry::new(
-                    format!("bench_gateway_{}", i),
+                    format!("bench_gateway_{i}"),
                     SocketAddr::from(([10, 0, 0, (i % 255) as u8], 55555 + (i % 1000) as u16)),
                 );
                 black_box(registry.add_or_update(entry));
@@ -338,7 +338,7 @@ fn bench_compression_ratio(c: &mut Criterion) {
 
         group.throughput(Throughput::Bytes(original_size as u64));
 
-        group.bench_function(format!("压缩-{}", data_type), |b| {
+        group.bench_function(format!("压缩-{data_type}"), |b| {
             b.iter_batched(
                 || data.clone(),
                 |data| {
@@ -362,7 +362,7 @@ fn bench_compression_ratio(c: &mut Criterion) {
 
         // 测试解压性能
         let compressed_data = manager.compress(&data).unwrap();
-        group.bench_function(format!("解压-{}", data_type), |b| {
+        group.bench_function(format!("解压-{data_type}"), |b| {
             b.iter_batched(
                 || compressed_data.clone(),
                 |compressed| {

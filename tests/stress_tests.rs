@@ -29,7 +29,7 @@ async fn test_gateway_concurrent_lifecycle() -> Result<()> {
 
             let temp_dir = TempDir::new().unwrap();
             let config = GatewayConfig {
-                name: format!("压力测试网关_{}", i),
+                name: format!("压力测试网关_{i}"),
                 port: 0,
                 cache_dir: temp_dir.path().to_path_buf(),
                 enable_mtls: false,
@@ -48,7 +48,7 @@ async fn test_gateway_concurrent_lifecycle() -> Result<()> {
             tokio::time::sleep(Duration::from_millis(50)).await;
             run_handle.abort();
 
-            println!("网关 {} 压力测试完成", i);
+            println!("网关 {i} 压力测试完成");
         });
 
         handles.push(handle);
@@ -81,7 +81,7 @@ async fn test_registry_stress() -> Result<()> {
             // 添加条目
             for j in 0..10 {
                 let entry = RegistryEntry::new(
-                    format!("压力测试网关_{}_{}", i, j),
+                    format!("压力测试网关_{i}_{j}"),
                     SocketAddr::from(([192, 168, 1, (i % 255) as u8], 55555 + j as u16)),
                 );
                 registry_clone.add_or_update(entry);
@@ -133,7 +133,7 @@ async fn test_compression_stress() -> Result<()> {
     for i in 0..50 {
         let handle = tokio::spawn(async move {
             let manager = CompressionManager::default();
-            let test_data = format!("压力测试数据块 {} - ", i).repeat(1000);
+            let test_data = format!("压力测试数据块 {i} - ").repeat(1000);
             let data_bytes = test_data.as_bytes();
 
             for _ in 0..20 {
@@ -182,8 +182,8 @@ async fn test_compression_stress() -> Result<()> {
 
     println!("压缩系统压力测试完成:");
     println!("- 持续时间: {:.2}秒", duration.as_secs_f64());
-    println!("- 总压缩次数: {}", total_compress);
-    println!("- 总解压次数: {}", total_decompress);
+    println!("- 总压缩次数: {total_compress}");
+    println!("- 总解压次数: {total_decompress}");
     println!("- 平均压缩比: {:.2}%", avg_ratio * 100.0);
     println!(
         "- 压缩吞吐量: {:.0} 操作/秒",
@@ -243,7 +243,7 @@ async fn test_performance_monitor_stress() -> Result<()> {
 
     println!("性能监控压力测试完成:");
     println!("- 持续时间: {:.2}秒", duration.as_secs_f64());
-    println!("- 总报告长度: {} 字符", total_report_length);
+    println!("- 总报告长度: {total_report_length} 字符");
     println!("- 平均报告长度: {} 字符", total_report_length / 50);
     println!(
         "- 操作吞吐量: {:.2} 监控器/秒",
@@ -264,33 +264,34 @@ async fn test_udp_broadcast_stress() -> Result<()> {
     // 创建多个UDP管理器并发操作
     for i in 0..10 {
         let handle = tokio::spawn(async move {
+            #[allow(deprecated)]
             let manager = UdpBroadcastManager::new(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
 
             let temp_dir = TempDir::new().unwrap();
 
             // 创建测试文件
             for j in 0..5 {
-                let test_file = temp_dir.path().join(format!("test_{}_{}.txt", i, j));
-                std::fs::write(&test_file, format!("测试数据 {} {}", i, j)).unwrap();
+                let test_file = temp_dir.path().join(format!("test_{i}_{j}.txt"));
+                std::fs::write(&test_file, format!("测试数据 {i} {j}")).unwrap();
             }
 
             // 尝试挂载目录（在某些环境中可能失败，这是正常的）
             match manager
                 .mount_directory(
-                    format!("/test_{}", i),
+                    format!("/test_{i}"),
                     temp_dir.path().to_string_lossy().to_string(),
                 )
                 .await
             {
                 Ok(_) => {
-                    println!("UDP管理器 {} 挂载成功", i);
+                    println!("UDP管理器 {i} 挂载成功");
 
-                    // 卸载
-                    let unmounted = manager.unmount_directory(&format!("/test_{}", i)).await;
-                    println!("UDP管理器 {} 卸载结果: {}", i, unmounted);
+                    // 尝试卸载
+                    let unmounted = manager.unmount_directory(&format!("/test_{i}")).await;
+                    println!("UDP管理器 {i} 卸载结果: {unmounted}");
                 }
                 Err(e) => {
-                    println!("UDP管理器 {} 挂载失败（在测试环境中可能正常）: {}", i, e);
+                    println!("UDP管理器 {i} 挂载失败（在测试环境中可能正常）: {e}");
                 }
             }
         });

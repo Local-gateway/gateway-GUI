@@ -342,6 +342,7 @@ impl DirectoryIndex {
 ///
 /// 负责处理基于 UDP 的 WDIC 协议广播功能。
 /// 性能优化版本：使用 AHashMap 提升哈希表性能。
+#[derive(Debug)]
 pub struct UdpBroadcastManager {
     /// 本地地址
     local_addr: SocketAddr,
@@ -357,8 +358,6 @@ pub struct UdpBroadcastManager {
     mounted_directories: Arc<RwLock<AHashMap<String, DirectoryIndex>>>,
     /// 运行状态
     running: Arc<Mutex<bool>>,
-    /// 安全文件读取器
-    secure_file_reader: Arc<SecureFileReader>,
 }
 
 impl UdpBroadcastManager {
@@ -381,13 +380,6 @@ impl UdpBroadcastManager {
         // 生成广播地址
         let broadcast_addresses = Self::generate_broadcast_addresses(local_addr);
 
-        // 创建安全文件读取器，初始为空的允许根目录列表
-        // 挂载目录时会更新允许的根目录
-        let secure_file_reader = Arc::new(SecureFileReader::new(
-            vec![], // 初始为空，挂载目录时更新
-            10 * 1024 * 1024, // 10MB 文件大小限制
-        ));
-
         Ok(Self {
             local_addr,
             udp_socket: Arc::new(udp_socket),
@@ -396,7 +388,6 @@ impl UdpBroadcastManager {
             broadcast_addresses,
             mounted_directories: Arc::new(RwLock::new(AHashMap::new())),
             running: Arc::new(Mutex::new(false)),
-            secure_file_reader,
         })
     }
 
@@ -436,7 +427,7 @@ impl UdpBroadcastManager {
         let interfaces = match if_addrs::get_if_addrs() {
             Ok(interfaces) => interfaces,
             Err(e) => {
-                debug!("无法获取网络接口列表: {}, 使用默认广播地址", e);
+                debug!("无法获取网络接口列表: {e}, 使用默认广播地址");
                 return Self::generate_fallback_addresses(port);
             }
         };
@@ -490,7 +481,7 @@ impl UdpBroadcastManager {
 
         debug!("UDP：生成了 {} 个广播/多播地址", addresses.len());
         for addr in &addresses {
-            debug!("  UDP - {}", addr);
+            debug!("  UDP - {addr}");
         }
 
         addresses
@@ -634,19 +625,19 @@ impl UdpBroadcastManager {
         while *running.lock().await {
             match socket.recv_from(&mut buffer) {
                 Ok((size, sender_addr)) => {
-                    debug!("收到来自 {} 的 {} 字节 UDP 数据", sender_addr, size);
+                    debug!("收到来自 {sender_addr} 的 {size} 字节 UDP 数据");
 
                     // 尝试解析为 UDP 令牌
                     match serde_json::from_slice::<UdpToken>(&buffer[..size]) {
                         Ok(token) => {
-                            debug!("解析 UDP 令牌成功: {:?}", token);
+                            debug!("解析 UDP 令牌成功: {token:?}");
                             let _ = event_sender.send(UdpBroadcastEvent::TokenReceived {
                                 token,
                                 sender: sender_addr,
                             });
                         }
                         Err(e) => {
-                            debug!("解析 UDP 令牌失败，尝试解析为 WDIC 消息: {}", e);
+                            debug!("解析 UDP 令牌失败，尝试解析为 WDIC 消息: {e}");
                             // 尝试解析为 WDIC 消息（向后兼容）
                             if let Ok(_message) =
                                 serde_json::from_slice::<WdicMessage>(&buffer[..size])
@@ -662,7 +653,7 @@ impl UdpBroadcastManager {
                 }
                 Err(e) => {
                     // 隐蔽 OS 异常，只记录调试信息
-                    debug!("UDP 接收时出现 OS 异常（已隐蔽处理）: {}", e);
+                    debug!("UDP 接收时出现 OS 异常（已隐蔽处理）: {e}");
                     let _ = event_sender.send(UdpBroadcastEvent::NetworkError {
                         error: "网络通信异常".to_string(),
                     });
@@ -691,14 +682,11 @@ impl UdpBroadcastManager {
             match self.udp_socket.send_to(&data, broadcast_addr) {
                 Ok(_) => {
                     success_count += 1;
-                    debug!("成功广播令牌到 {}", broadcast_addr);
+                    debug!("成功广播令牌到 {broadcast_addr}");
                 }
                 Err(e) => {
                     // 隐蔽 OS 异常
-                    debug!(
-                        "广播到 {} 时出现 OS 异常（已隐蔽处理）: {}",
-                        broadcast_addr, e
-                    );
+                    debug!("广播到 {broadcast_addr} 时出现 OS 异常（已隐蔽处理）: {e}");
                 }
             }
         }
@@ -726,11 +714,11 @@ impl UdpBroadcastManager {
         let data =
             serde_json::to_vec(token).map_err(|e| anyhow::anyhow!("序列化令牌失败: {}", e))?;
 
-        debug!("发送令牌到 {}", target);
+        debug!("发送令牌到 {target}");
 
         self.udp_socket.send_to(&data, target).map_err(|e| {
             // 隐蔽 OS 异常
-            debug!("发送令牌到 {} 时出现 OS 异常: {}", target, e);
+            debug!("发送令牌到 {target} 时出现 OS 异常: {e}");
             anyhow::anyhow!("网络通信失败")
         })?;
 
@@ -748,7 +736,7 @@ impl UdpBroadcastManager {
     ///
     /// 挂载结果
     pub async fn mount_directory(&self, name: String, path: String) -> Result<()> {
-        info!("开始挂载目录: {} -> {}", name, path);
+        info!("开始挂载目录: {name} -> {path}");
 
         // 验证挂载点名称
         if name.is_empty() || name.len() > 255 {
@@ -792,7 +780,7 @@ impl UdpBroadcastManager {
                 .map_err(|e| anyhow::anyhow!("创建索引目录失败: {}", e))?;
         }
 
-        let index_file = index_dir.join(format!("{}.index", name));
+        let index_file = index_dir.join(format!("{name}.index"));
         index.save_to_file(&index_file.to_string_lossy())?;
 
         // 添加到挂载点
@@ -813,7 +801,7 @@ impl UdpBroadcastManager {
         // 由于 SecureFileReader 不可变，我们在读取文件时会重新创建
         // 这是一个权衡，确保每次文件访问都使用最新的安全配置
 
-        info!("目录挂载成功: {}", name);
+        info!("目录挂载成功: {name}");
         Ok(())
     }
 
@@ -905,7 +893,7 @@ impl UdpBroadcastManager {
         };
 
         if !file_found_in_index {
-            warn!("尝试访问未在索引中的文件: {}", file_path);
+            warn!("尝试访问未在索引中的文件: {file_path}");
             return Err(anyhow::anyhow!("文件访问被拒绝: 文件不在任何挂载的目录索引中"));
         }
 

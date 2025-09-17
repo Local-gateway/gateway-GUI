@@ -1,0 +1,29 @@
+[package]
+name = "wdic-gateway"
+version = "0.2.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.4.1", features = [] }
+
+[dependencies]
+tauri = { version = "2.8.5", features = ["shell-open"] }
+tauri-plugin-shell = "2.3.1"
+serde = { version = "1.0.221", features = ["derive"] }
+serde_json = "1.0.144"
+tokio = { version = "1.47.1", features = ["full"] }
+anyhow = "1.0.99"
+log = "0.4.28"
+env_logger = "0.11.8"
+chrono = { version = "0.4.42", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+if-addrs = "0.14.0"
+dashmap = "6.1.0"
+sysinfo = "0.37.0"
+
+# 从父项目导入核心功能
+wdic-gateway = { path = ".." }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

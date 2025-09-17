@@ -33,7 +33,7 @@ pub struct CertificateInfo {
 }
 
 /// mTLS 配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MtlsConfig {
     /// CA 证书路径
     pub ca_cert_path: PathBuf,
@@ -54,7 +54,7 @@ pub struct MtlsConfig {
 }
 
 /// 证书验证模式
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VerifyMode {
     /// 不验证证书
     None,
@@ -67,7 +67,7 @@ pub enum VerifyMode {
 }
 
 /// TLS 版本
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TlsVersion {
     /// TLS 1.2
     Tls12,
@@ -95,6 +95,7 @@ impl Default for MtlsConfig {
 }
 
 /// TLS 管理器
+#[derive(Debug)]
 pub struct TlsManager {
     /// 配置
     config: MtlsConfig,
@@ -241,12 +242,12 @@ impl TlsManager {
     /// 保存证书到文件
     fn save_certificate_to_file(&self, cert_data: &[u8], path: &Path) -> Result<()> {
         let mut file =
-            File::create(path).with_context(|| format!("创建证书文件失败: {:?}", path))?;
+            File::create(path).with_context(|| format!("创建证书文件失败: {path:?}"))?;
 
         file.write_all(cert_data)
-            .with_context(|| format!("写入证书文件失败: {:?}", path))?;
+            .with_context(|| format!("写入证书文件失败: {path:?}"))?;
 
-        debug!("证书已保存到: {:?}", path);
+        debug!("证书已保存到: {path:?}");
 
         Ok(())
     }
@@ -254,12 +255,12 @@ impl TlsManager {
     /// 保存私钥到文件
     fn save_private_key_to_file(&self, key_data: &[u8], path: &Path) -> Result<()> {
         let mut file =
-            File::create(path).with_context(|| format!("创建私钥文件失败: {:?}", path))?;
+            File::create(path).with_context(|| format!("创建私钥文件失败: {path:?}"))?;
 
         file.write_all(key_data)
-            .with_context(|| format!("写入私钥文件失败: {:?}", path))?;
+            .with_context(|| format!("写入私钥文件失败: {path:?}"))?;
 
-        debug!("私钥已保存到: {:?}", path);
+        debug!("私钥已保存到: {path:?}");
 
         Ok(())
     }
@@ -301,15 +302,15 @@ impl TlsManager {
             return Err(anyhow::anyhow!("证书文件不存在: {:?}", path));
         }
 
-        let mut file = File::open(path).with_context(|| format!("打开证书文件失败: {:?}", path))?;
+        let mut file = File::open(path).with_context(|| format!("打开证书文件失败: {path:?}"))?;
 
         let mut cert_data = Vec::new();
         file.read_to_end(&mut cert_data)
-            .with_context(|| format!("读取证书文件失败: {:?}", path))?;
+            .with_context(|| format!("读取证书文件失败: {path:?}"))?;
 
         self.cert_cache.insert(name.to_string(), cert_data);
 
-        debug!("证书已加载: {} -> {:?}", name, path);
+        debug!("证书已加载: {name} -> {path:?}");
 
         Ok(())
     }
@@ -320,15 +321,15 @@ impl TlsManager {
             return Err(anyhow::anyhow!("私钥文件不存在: {:?}", path));
         }
 
-        let mut file = File::open(path).with_context(|| format!("打开私钥文件失败: {:?}", path))?;
+        let mut file = File::open(path).with_context(|| format!("读取私钥文件失败: {path:?}"))?;
 
         let mut key_data = Vec::new();
         file.read_to_end(&mut key_data)
-            .with_context(|| format!("读取私钥文件失败: {:?}", path))?;
+            .with_context(|| format!("读取私钥文件失败: {path:?}"))?;
 
         self.key_cache.insert(name.to_string(), key_data);
 
-        debug!("私钥已加载: {} -> {:?}", name, path);
+        debug!("私钥已加载: {name} -> {path:?}");
 
         Ok(())
     }
@@ -449,12 +450,14 @@ mod tests {
     #[test]
     fn test_tls_manager_creation() -> Result<()> {
         let temp_dir = tempdir()?;
-        let mut config = MtlsConfig::default();
-        config.ca_cert_path = temp_dir.path().join("ca.crt");
-        config.server_cert_path = temp_dir.path().join("server.crt");
-        config.server_key_path = temp_dir.path().join("server.key");
-        config.client_cert_path = temp_dir.path().join("client.crt");
-        config.client_key_path = temp_dir.path().join("client.key");
+        let config = MtlsConfig {
+            ca_cert_path: temp_dir.path().join("ca.crt"),
+            server_cert_path: temp_dir.path().join("server.crt"),
+            server_key_path: temp_dir.path().join("server.key"),
+            client_cert_path: temp_dir.path().join("client.crt"),
+            client_key_path: temp_dir.path().join("client.key"),
+            ..Default::default()
+        };
 
         let manager = TlsManager::new(config)?;
         assert!(manager.is_tls13_enabled());
@@ -466,12 +469,14 @@ mod tests {
     #[test]
     fn test_certificate_verification() -> Result<()> {
         let temp_dir = tempdir()?;
-        let mut config = MtlsConfig::default();
-        config.ca_cert_path = temp_dir.path().join("ca.crt");
-        config.server_cert_path = temp_dir.path().join("server.crt");
-        config.server_key_path = temp_dir.path().join("server.key");
-        config.client_cert_path = temp_dir.path().join("client.crt");
-        config.client_key_path = temp_dir.path().join("client.key");
+        let config = MtlsConfig {
+            ca_cert_path: temp_dir.path().join("ca.crt"),
+            server_cert_path: temp_dir.path().join("server.crt"),
+            server_key_path: temp_dir.path().join("server.key"),
+            client_cert_path: temp_dir.path().join("client.crt"),
+            client_key_path: temp_dir.path().join("client.key"),
+            ..Default::default()
+        };
 
         let manager = TlsManager::new(config)?;
 
@@ -487,12 +492,14 @@ mod tests {
     #[test]
     fn test_certificate_stats() -> Result<()> {
         let temp_dir = tempdir()?;
-        let mut config = MtlsConfig::default();
-        config.ca_cert_path = temp_dir.path().join("ca.crt");
-        config.server_cert_path = temp_dir.path().join("server.crt");
-        config.server_key_path = temp_dir.path().join("server.key");
-        config.client_cert_path = temp_dir.path().join("client.crt");
-        config.client_key_path = temp_dir.path().join("client.key");
+        let config = MtlsConfig {
+            ca_cert_path: temp_dir.path().join("ca.crt"),
+            server_cert_path: temp_dir.path().join("server.crt"),
+            server_key_path: temp_dir.path().join("server.key"),
+            client_cert_path: temp_dir.path().join("client.crt"),
+            client_key_path: temp_dir.path().join("client.key"),
+            ..Default::default()
+        };
 
         let manager = TlsManager::new(config)?;
         let (cert_count, key_count, mtls_ready) = manager.get_certificate_stats();

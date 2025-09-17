@@ -4,7 +4,6 @@
 
 use std::fs;
 use tempfile::tempdir;
-use tokio;
 
 use wdic_gateway::security::{PathValidator, SecureFileReader, SearchResultFilter};
 use wdic_gateway::udp_protocol::{DirectoryIndex, UdpBroadcastManager};
@@ -42,8 +41,7 @@ mod security_tests {
             let result = validator.validate_and_normalize(attack_path);
             assert!(
                 result.is_err(),
-                "路径遍历攻击应该被阻止: {}",
-                attack_path
+                "路径遍历攻击应该被阻止: {attack_path}"
             );
         }
     }
@@ -170,6 +168,7 @@ mod security_tests {
         let test_dir = temp_dir.path().join("test_mount");
         fs::create_dir_all(&test_dir).unwrap();
 
+        #[allow(deprecated)]
         let manager = UdpBroadcastManager::new("127.0.0.1:0".parse().unwrap()).unwrap();
 
         // 测试正常挂载
@@ -203,8 +202,7 @@ mod security_tests {
                 .await;
             assert!(
                 result.is_err(),
-                "无效挂载点名称应该被拒绝: {}",
-                invalid_name
+                "无效挂载点名称应该被拒绝: {invalid_name}"
             );
         }
 
@@ -239,6 +237,7 @@ mod security_tests {
         let external_file = temp_dir.path().join("external.txt");
         fs::write(&external_file, b"external content").unwrap();
 
+        #[allow(deprecated)]
         let manager = UdpBroadcastManager::new("127.0.0.1:0".parse().unwrap()).unwrap();
         
         // 挂载目录
@@ -270,7 +269,7 @@ mod security_tests {
         assert!(validator.validate_directory_depth(std::path::Path::new(normal_path)).is_ok());
 
         // 测试过深的路径
-        let deep_path_components: Vec<String> = (0..50).map(|i| format!("dir{}", i)).collect();
+        let deep_path_components: Vec<String> = (0..50).map(|i| format!("dir{i}")).collect();
         let deep_path = format!("/{}", deep_path_components.join("/"));
         
         let result = validator.validate_directory_depth(std::path::Path::new(&deep_path));
@@ -292,8 +291,7 @@ mod security_tests {
             let result = validator.validate_and_normalize(malicious_path);
             assert!(
                 result.is_err(),
-                "包含恶意字符的路径应该被拒绝: {}",
-                malicious_path
+                "包含恶意字符的路径应该被拒绝: {malicious_path}"
             );
         }
     }
@@ -304,7 +302,7 @@ mod security_tests {
 
         // 创建超过限制数量的搜索结果
         let large_results: Vec<String> = (0..2000)
-            .map(|i| format!("/home/user/file{}.txt", i))
+            .map(|i| format!("/home/user/file{i}.txt"))
             .collect();
 
         let filtered = filter.filter_results(large_results);

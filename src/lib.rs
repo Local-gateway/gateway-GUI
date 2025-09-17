@@ -33,6 +33,8 @@ pub mod performance;
 pub mod protocol;
 pub mod registry;
 pub mod security;
+pub mod tauri_api;
+pub mod tauri_api_tests;
 pub mod tls;
 pub mod udp_protocol;
 
@@ -48,6 +50,13 @@ pub use performance::{
 };
 pub use protocol::WdicProtocol;
 pub use registry::{Registry, RegistryEntry};
+pub use tauri_api::{
+    GlobalGatewayState, GatewayStatus, NetworkStatus, MountPoint, FileTransferTask,
+    SecurityConfig, AccessRule, SystemInfo, HealthStatus, LogEntry, CacheStats,
+    BenchmarkResult as TauriBenchmarkResult, BenchmarkStatus,
+    DirectoryEntry as TauriDirectoryEntry, DiscoveredNode, CertificateInfo, GeneratedCertificate,
+    ActiveSession, TransferStatus, NetworkInterface,
+};
 pub use security::{PathValidator, SecureFileReader, SearchResultFilter};
 pub use tls::{MtlsConfig, TlsManager, TlsVersion, VerifyMode};
 pub use udp_protocol::{

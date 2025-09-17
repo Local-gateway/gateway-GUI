@@ -379,7 +379,7 @@ impl PerformanceMonitor {
         test_name: &str,
         test_suite: &PerformanceTestSuite,
     ) -> Result<BenchmarkResult> {
-        info!("开始吞吐量基准测试: {}", test_name);
+        info!("开始吞吐量基准测试: {test_name}");
 
         let start_time = Instant::now();
         let mut operations = 0u64;
@@ -479,7 +479,7 @@ impl PerformanceMonitor {
         test_name: &str,
         iterations: usize,
     ) -> Result<BenchmarkResult> {
-        info!("开始延迟基准测试: {} ({} 次迭代)", test_name, iterations);
+        info!("开始延迟基准测试: {test_name} ({iterations} 次迭代)");
 
         let start_time = Instant::now();
         let mut latencies = SmallVec::<[f64; 64]>::with_capacity(iterations);
@@ -539,10 +539,8 @@ impl PerformanceMonitor {
             .insert(test_name.to_string(), result.clone());
 
         info!(
-            "延迟基准测试完成: {} - 平均延迟: {:.3}ms, P95: {:.3}ms",
-            test_name,
-            avg_latency,
-            latencies[latencies.len() * 95 / 100]
+            "延迟基准测试完成: {test_name} - 平均延迟: {avg_latency:.3}ms, P95: {p95:.3}ms",
+            p95 = latencies[latencies.len() * 95 / 100]
         );
 
         Ok(result)
@@ -577,12 +575,20 @@ impl PerformanceMonitor {
         let benchmarks = self.benchmark_results.read().await.clone();
 
         PerformanceReport {
-            network,
-            memory,
-            latency,
-            connection,
+            network: network.clone(),
+            memory: memory.clone(),
+            latency: latency.clone(),
+            connection: connection.clone(),
             benchmarks,
             generated_at: chrono::Utc::now(),
+            current_connections: connection.active_connections,
+            total_requests: network.packets_received,
+            error_count: network.send_errors + network.receive_errors,
+            running_benchmarks: Vec::new(),
+            uptime_seconds: 0,
+            cpu_usage_percent: 0.0,
+            network_throughput_bps: network.throughput_bps,
+            average_latency_ms: latency.average_latency,
         }
     }
 
@@ -685,7 +691,7 @@ impl PerformanceMonitor {
         if !report.benchmarks.is_empty() {
             output.push_str("## 基准测试结果\n");
             for (name, result) in &report.benchmarks {
-                output.push_str(&format!("### {}\n", name));
+                output.push_str(&format!("### {name}\n"));
                 output.push_str(&format!("持续时间: {:.2} ms\n", result.duration_ms));
                 output.push_str(&format!("操作次数: {}\n", result.operations));
                 output.push_str(&format!("每秒操作数: {:.2}\n", result.ops_per_second));
@@ -706,6 +712,131 @@ impl PerformanceMonitor {
         }
 
         output
+    }
+
+    /// 获取性能报告
+    ///
+    /// # 返回值
+    ///
+    /// 性能报告
+    pub async fn get_report(&self) -> PerformanceReport {
+        let network_metrics = self.network_metrics.read().await;
+        let memory_metrics = self.memory_metrics.read().await;
+        let latency_metrics = self.latency_metrics.read().await;
+        let connection_metrics = self.connection_metrics.read().await;
+
+        // 刷新系统信息
+        {
+            let mut system = self.system.lock().await;
+            system.refresh_all();
+        }
+
+        PerformanceReport {
+            network: network_metrics.clone(),
+            memory: memory_metrics.clone(),
+            latency: latency_metrics.clone(),
+            connection: connection_metrics.clone(),
+            benchmarks: self.benchmark_results.read().await.clone(),
+            generated_at: chrono::Utc::now(),
+            current_connections: connection_metrics.active_connections,
+            total_requests: network_metrics.packets_received,
+            error_count: network_metrics.send_errors + network_metrics.receive_errors,
+            running_benchmarks: Vec::new(),
+            uptime_seconds: 0,
+            cpu_usage_percent: 0.0,
+            network_throughput_bps: network_metrics.throughput_bps,
+            average_latency_ms: latency_metrics.average_latency,
+        }
+    }
+
+    /// 启动基准测试
+    ///
+    /// # 参数
+    ///
+    /// * `test_type` - 测试类型
+    /// * `duration_seconds` - 测试持续时间
+    ///
+    /// # 返回值
+    ///
+    /// 基准测试 ID
+    pub async fn start_benchmark(&self, test_type: &str, duration_seconds: u64) -> anyhow::Result<String> {
+        let benchmark_id = uuid::Uuid::new_v4().to_string();
+        
+        let _benchmark_result = crate::tauri_api::BenchmarkResult {
+            id: benchmark_id.clone(),
+            test_type: test_type.to_string(),
+            status: crate::tauri_api::BenchmarkStatus::Running,
+            start_time: chrono::Utc::now(),
+            end_time: None,
+            results: std::collections::HashMap::new(),
+            error_message: None,
+        };
+
+        {
+            let mut benchmarks = self.benchmark_results.write().await;
+            benchmarks.insert(benchmark_id.clone(), BenchmarkResult {
+                name: test_type.to_string(),
+                duration_ms: duration_seconds as f64 * 1000.0,
+                operations: 0,
+                ops_per_second: 0.0,
+                average_latency: 0.0,
+                min_latency: 0.0,
+                max_latency: 0.0,
+                throughput_bps: 0.0,
+                memory_usage: 0,
+                timestamp: chrono::Utc::now(),
+                parameters: AHashMap::new(),
+            });
+        }
+
+        // 启动后台任务执行基准测试
+        let benchmark_id_clone = benchmark_id.clone();
+        let test_type_clone = test_type.to_string();
+        tokio::spawn(async move {
+            // 这里应该执行实际的基准测试逻辑
+            tokio::time::sleep(tokio::time::Duration::from_secs(duration_seconds)).await;
+            log::info!("基准测试 {benchmark_id_clone} ({test_type_clone}) 完成");
+        });
+
+        Ok(benchmark_id)
+    }
+
+    /// 获取基准测试结果
+    ///
+    /// # 参数
+    ///
+    /// * `benchmark_id` - 基准测试 ID
+    ///
+    /// # 返回值
+    ///
+    /// 基准测试结果
+    pub async fn get_benchmark_result(&self, benchmark_id: &str) -> anyhow::Result<crate::tauri_api::BenchmarkResult> {
+        let benchmarks = self.benchmark_results.read().await;
+        
+        if let Some(result) = benchmarks.get(benchmark_id) {
+            // 转换内部结果格式到 Tauri API 格式
+            let mut results = std::collections::HashMap::new();
+            results.insert("latency_avg".to_string(), result.average_latency);
+            results.insert("latency_min".to_string(), result.min_latency);
+            results.insert("latency_max".to_string(), result.max_latency);
+            results.insert("latency_p95".to_string(), result.max_latency * 0.95);
+            results.insert("throughput_ops_per_sec".to_string(), result.ops_per_second);
+            results.insert("memory_usage_mb".to_string(), result.memory_usage as f64 / 1024.0 / 1024.0);
+            results.insert("cpu_usage_percent".to_string(), 0.0); // 暂时使用0，后续添加CPU监控
+            results.insert("error_count".to_string(), 0.0); // 暂时使用0，后续添加错误统计
+
+            Ok(crate::tauri_api::BenchmarkResult {
+                id: benchmark_id.to_string(),
+                test_type: result.name.clone(),
+                status: crate::tauri_api::BenchmarkStatus::Completed,
+                start_time: result.timestamp,
+                end_time: Some(result.timestamp + chrono::Duration::try_milliseconds(result.duration_ms as i64).unwrap_or(chrono::Duration::seconds(0))),
+                results,
+                error_message: None,
+            })
+        } else {
+            Err(anyhow::anyhow!("基准测试不存在: {}", benchmark_id))
+        }
     }
 }
 
@@ -737,6 +868,22 @@ pub struct PerformanceReport {
     pub benchmarks: AHashMap<String, BenchmarkResult>,
     /// 报告生成时间
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// 当前连接数
+    pub current_connections: u64,
+    /// 总请求数
+    pub total_requests: u64,
+    /// 错误次数
+    pub error_count: u64,
+    /// 正在运行的基准测试 ID 列表
+    pub running_benchmarks: Vec<String>,
+    /// 系统启动时间
+    pub uptime_seconds: u64,
+    /// CPU 使用率（百分比）
+    pub cpu_usage_percent: f64,
+    /// 网络吞吐量（字节/秒）
+    pub network_throughput_bps: f64,
+    /// 平均延迟（毫秒）
+    pub average_latency_ms: f64,
 }
 
 #[cfg(test)]

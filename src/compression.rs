@@ -210,7 +210,7 @@ impl CompressionManager {
                 let mut result = Vec::with_capacity(data.len() + 1);
                 result.push(CompressionFlag::None.into());
                 result.extend_from_slice(data);
-                log::warn!("压缩失败，使用原始数据: {}", e);
+                log::warn!("压缩失败，使用原始数据: {e}");
                 Ok(result)
             }
         }

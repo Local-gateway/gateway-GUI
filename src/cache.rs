@@ -199,6 +199,7 @@ impl CacheEntry {
 }
 
 /// 网关缓存系统
+#[derive(Debug, Default)]
 pub struct GatewayCache {
     /// 缓存目录
     cache_dir: PathBuf,
@@ -298,8 +299,7 @@ impl GatewayCache {
         let ttl = ttl.unwrap_or(self.default_ttl);
 
         debug!(
-            "缓存文件: {}, 名称哈希: {}, 内容哈希: {}",
-            name, name_hash, content_hash
+            "缓存文件: {name}, 名称哈希: {name_hash}, 内容哈希: {content_hash}"
         );
 
         // 检查是否需要清理空间
@@ -332,7 +332,7 @@ impl GatewayCache {
         let random_suffix = Self::generate_random_suffix();
 
         // 创建缓存文件
-        let cache_filename = format!("{}.cach", name_hash);
+        let cache_filename = format!("{name_hash}.cach");
         let cache_file_path = self.cache_dir.join(&cache_filename);
 
         let mut cache_file = OpenOptions::new()
@@ -365,8 +365,7 @@ impl GatewayCache {
         self.current_cache_size += cache_file_size as u64;
 
         info!(
-            "文件缓存成功: {} -> {}.cach (大小: {} 字节)",
-            name, name_hash, cache_file_size
+            "文件缓存成功: {name} -> {name_hash}.cach (大小: {cache_file_size} 字节)"
         );
 
         Ok(content_hash)
@@ -385,7 +384,7 @@ impl GatewayCache {
         if let Some(cache_entry) = self.cache_index.get_mut(file_hash) {
             // 检查是否过期
             if cache_entry.metadata.is_expired() {
-                debug!("缓存文件已过期: {}", file_hash);
+                debug!("缓存文件已过期: {file_hash}");
                 self.remove_cache_entry(file_hash)?;
                 return Ok(None);
             }
@@ -417,13 +416,13 @@ impl GatewayCache {
                 zstd::decode_all(&compressed_data[..]).context("解压缩文件数据失败")?;
 
             debug!(
-                "缓存命中: {} (访问次数: {})",
-                file_hash, cache_entry.access_count
+                "缓存命中: {file_hash} (访问次数: {access_count})",
+                access_count = cache_entry.access_count
             );
 
             Ok(Some((decompressed_data, metadata)))
         } else {
-            debug!("缓存未命中: {}", file_hash);
+            debug!("缓存未命中: {file_hash}");
             Ok(None)
         }
     }
@@ -444,6 +443,44 @@ impl GatewayCache {
     /// 获取所有缓存文件的名称哈希列表
     pub fn get_name_hash_list(&self) -> Vec<String> {
         self.name_hash_index.keys().cloned().collect()
+    }
+
+    /// 获取缓存统计信息
+    ///
+    /// # 返回值
+    ///
+    /// 缓存统计信息
+    pub async fn get_stats(&self) -> crate::tauri_api::CacheStats {
+        let total_entries = self.cache_index.len();
+        
+        // 这里应该从实际的统计数据获取命中率等信息
+        // 目前使用模拟数据
+        let hit_count = 100u64;
+        let miss_count = 20u64;
+        let hit_rate = if hit_count + miss_count > 0 {
+            hit_count as f64 / (hit_count + miss_count) as f64
+        } else {
+            0.0
+        };
+
+        crate::tauri_api::CacheStats {
+            item_count: total_entries,
+            hit_count,
+            miss_count,
+            hit_rate,
+            memory_usage: self.current_cache_size as usize,
+            max_capacity: self.max_cache_size as usize,
+        }
+    }
+
+    /// 健康检查
+    ///
+    /// # 返回值
+    ///
+    /// 健康状态
+    pub async fn health_check(&self) -> bool {
+        // 检查缓存目录是否存在和可访问
+        self.cache_dir.exists() && self.cache_dir.is_dir()
     }
 
     /// 获取缓存统计信息
@@ -471,7 +508,7 @@ impl GatewayCache {
         }
 
         if count > 0 {
-            info!("清理了 {} 个过期缓存条目", count);
+            info!("清理了 {count} 个过期缓存条目");
         }
 
         Ok(count)
@@ -549,7 +586,7 @@ impl GatewayCache {
             let name_hash = Self::calculate_name_hash(&entry.metadata.original_name);
             self.name_hash_index.remove(&name_hash);
 
-            debug!("移除缓存条目: {}", file_hash);
+            debug!("移除缓存条目: {file_hash}");
         }
 
         Ok(())
@@ -567,7 +604,7 @@ impl GatewayCache {
 
             if path.extension().and_then(|s| s.to_str()) == Some("cach") {
                 if let Err(e) = self.load_cache_file(&path) {
-                    warn!("加载缓存文件失败: {:?}, 错误: {}", path, e);
+                    warn!("加载缓存文件失败: {path:?}, 错误: {e}");
                     // 删除损坏的缓存文件
                     let _ = std::fs::remove_file(&path);
                 } else {
@@ -576,7 +613,7 @@ impl GatewayCache {
             }
         }
 
-        info!("加载了 {} 个现有缓存文件", loaded_count);
+        info!("加载了 {loaded_count} 个现有缓存文件");
 
         Ok(())
     }
@@ -595,7 +632,7 @@ impl GatewayCache {
 
         // 检查是否过期
         if metadata.is_expired() {
-            debug!("加载时发现过期缓存文件: {:?}", path);
+            debug!("加载时发现过期缓存文件: {path:?}");
             std::fs::remove_file(path).context("删除过期缓存文件失败")?;
             return Ok(());
         }

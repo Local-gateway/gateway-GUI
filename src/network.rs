@@ -81,6 +81,7 @@ impl ConnectionState {
 /// 网络管理器
 ///
 /// 负责处理网络通信，包括 UDP 广播和消息收发。
+#[derive(Debug)]
 pub struct NetworkManager {
     /// 本地地址
     local_addr: SocketAddr,
@@ -161,13 +162,13 @@ impl NetworkManager {
         let mut addresses = Vec::new();
         let port = local_addr.port();
 
-        debug!("为地址 {} 生成广播地址列表", local_addr);
+        debug!("为地址 {local_addr} 生成广播地址列表");
 
         // 获取所有网络接口
         let interfaces = match if_addrs::get_if_addrs() {
             Ok(interfaces) => interfaces,
             Err(e) => {
-                warn!("无法获取网络接口列表: {}, 使用默认广播地址", e);
+                warn!("无法获取网络接口列表: {e}, 使用默认广播地址");
                 return Self::generate_fallback_addresses(port);
             }
         };
@@ -221,7 +222,7 @@ impl NetworkManager {
 
         info!("生成了 {} 个广播/多播地址", addresses.len());
         for addr in &addresses {
-            debug!("  - {}", addr);
+            debug!("  - {addr}");
         }
 
         addresses
@@ -359,7 +360,7 @@ impl NetworkManager {
         loop {
             match socket.recv_from(&mut buffer) {
                 Ok((size, sender_addr)) => {
-                    debug!("收到来自 {} 的 {} 字节数据", sender_addr, size);
+                    debug!("收到来自 {sender_addr} 的 {size} 字节数据");
 
                     // 更新连接状态
                     {
@@ -381,7 +382,7 @@ impl NetworkManager {
 
                             // 验证消息
                             if let Err(e) = protocol.validate_message(&message) {
-                                warn!("消息验证失败: {}", e);
+                                warn!("消息验证失败: {e}");
                                 continue;
                             }
 
@@ -391,7 +392,7 @@ impl NetworkManager {
                             });
                         }
                         Err(e) => {
-                            warn!("解析消息失败: {}", e);
+                            warn!("解析消息失败: {e}");
                         }
                     }
                 }
@@ -400,9 +401,9 @@ impl NetworkManager {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 Err(e) => {
-                    error!("UDP 接收错误: {}", e);
+                    error!("UDP 接收错误: {e}");
                     let _ = event_sender.send(NetworkEvent::NetworkError {
-                        error: format!("UDP 接收错误: {}", e),
+                        error: format!("UDP 接收错误: {e}"),
                     });
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -428,7 +429,7 @@ impl NetworkManager {
 
             for addr in expired_addrs {
                 conns.remove(&addr);
-                debug!("清理过期连接: {}", addr);
+                debug!("清理过期连接: {addr}");
             }
         }
     }
@@ -446,11 +447,11 @@ impl NetworkManager {
     pub async fn send_message(&self, message: &WdicMessage, target: SocketAddr) -> Result<()> {
         let data = message.to_bytes()?;
 
-        debug!("发送 {} 消息到 {}", message.message_type(), target);
+        debug!("发送 {} 消息到 {target}", message.message_type());
 
         self.udp_socket
             .send_to(&data, target)
-            .map_err(|e| anyhow::anyhow!("发送消息到 {} 失败: {}", target, e))?;
+            .map_err(|e| anyhow::anyhow!("发送消息到 {target} 失败: {e}"))?;
 
         Ok(())
     }
@@ -478,10 +479,10 @@ impl NetworkManager {
             match self.udp_socket.send_to(&data, broadcast_addr) {
                 Ok(_) => {
                     success_count += 1;
-                    debug!("成功广播到 {}", broadcast_addr);
+                    debug!("成功广播到 {broadcast_addr}");
                 }
                 Err(e) => {
-                    warn!("广播到 {} 失败: {}", broadcast_addr, e);
+                    warn!("广播到 {broadcast_addr} 失败: {e}");
                 }
             }
         }
@@ -552,16 +553,239 @@ impl NetworkManager {
     }
 
     /// 关闭网络管理器
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
     pub async fn shutdown(&self) -> Result<()> {
         info!("关闭网络管理器");
+        // 清理所有连接
+        self.connections.lock().await.clear();
+        Ok(())
+    }
 
-        // 清空所有连接
-        {
-            let mut conns = self.connections.lock().await;
-            conns.clear();
-        }
+    // ============================================================================
+    // Tauri API 需要的方法
+    // ============================================================================
+
+    /// 获取网络信息
+    ///
+    /// # 返回值
+    ///
+    /// 网络状态信息
+    pub async fn get_network_info(&self) -> anyhow::Result<crate::tauri_api::NetworkStatus> {
+        use if_addrs::get_if_addrs;
+
+        let interfaces = get_if_addrs()
+            .map_err(|e| anyhow::anyhow!("获取网络接口失败: {}", e))?;
+
+        let network_interfaces: Vec<crate::tauri_api::NetworkInterface> = interfaces
+            .into_iter()
+            .map(|iface| {
+                let name = iface.name.clone();
+                crate::tauri_api::NetworkInterface {
+                    name,
+                    ip_address: iface.ip().to_string(),
+                    is_active: !iface.ip().is_loopback(),
+                    interface_type: if iface.ip().is_ipv4() {
+                        "IPv4".to_string()
+                    } else {
+                        "IPv6".to_string()
+                    },
+                }
+            })
+            .collect();
+
+        let local_ip = self.local_addr.ip().to_string();
+        let listen_port = self.local_addr.port();
+
+        Ok(crate::tauri_api::NetworkStatus {
+            local_ip,
+            listen_port,
+            network_interfaces,
+            p2p_discovery_enabled: false, // 这里应该从实际状态获取
+            discovered_nodes: 0,          // 这里应该从实际状态获取
+        })
+    }
+
+    /// 启动 P2P 发现
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn start_p2p_discovery(&self) -> anyhow::Result<()> {
+        log::info!("启动 P2P 发现");
+        // 这里应该启动实际的 P2P 发现逻辑
+        Ok(())
+    }
+
+    /// 停止 P2P 发现
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn stop_p2p_discovery(&self) -> anyhow::Result<()> {
+        log::info!("停止 P2P 发现");
+        // 这里应该停止实际的 P2P 发现逻辑
+        Ok(())
+    }
+
+    /// 获取已发现的节点列表
+    ///
+    /// # 返回值
+    ///
+    /// 发现的节点列表
+    pub async fn get_discovered_nodes(&self) -> anyhow::Result<Vec<crate::tauri_api::DiscoveredNode>> {
+        use chrono::Utc;
+
+        // 这里应该从实际的发现机制获取节点
+        // 目前返回示例数据
+        let nodes = vec![
+            crate::tauri_api::DiscoveredNode {
+                node_id: uuid::Uuid::new_v4().to_string(),
+                ip_address: "192.168.1.100".to_string(),
+                port: 55555,
+                name: "示例节点1".to_string(),
+                discovered_time: Utc::now(),
+                last_seen: Utc::now(),
+                is_online: true,
+                node_type: "gateway".to_string(),
+            },
+        ];
+
+        Ok(nodes)
+    }
+
+    /// 连接到指定节点
+    ///
+    /// # 参数
+    ///
+    /// * `node_id` - 节点 ID
+    /// * `ip_address` - IP 地址
+    /// * `port` - 端口
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn connect_to_node(
+        &self,
+        node_id: &str,
+        ip_address: &str,
+        port: u16,
+    ) -> anyhow::Result<()> {
+        use std::net::SocketAddr;
+
+        let addr: SocketAddr = format!("{ip_address}:{port}")
+            .parse()
+            .map_err(|e| anyhow::anyhow!("无效地址: {}", e))?;
+
+        log::info!("连接到节点 {node_id} ({addr})");
+
+        // 这里应该建立实际的连接
+        let mut connections = self.connections.lock().await;
+        connections.insert(addr, ConnectionState::new(addr));
 
         Ok(())
+    }
+
+    /// 断开与节点的连接
+    ///
+    /// # 参数
+    ///
+    /// * `node_id` - 节点 ID
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn disconnect_from_node(&self, node_id: &str) -> anyhow::Result<()> {
+        log::info!("断开与节点 {node_id} 的连接");
+
+        // 这里应该根据 node_id 找到对应的连接并断开
+        // 目前简化实现
+        Ok(())
+    }
+
+    /// 创建文件传输任务
+    ///
+    /// # 参数
+    ///
+    /// * `task_id` - 任务 ID
+    /// * `source_path` - 源路径
+    /// * `target_path` - 目标路径
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn create_transfer_task(
+        &self,
+        task_id: String,
+        source_path: std::path::PathBuf,
+        target_path: std::path::PathBuf,
+    ) -> anyhow::Result<()> {
+        log::info!(
+            "创建文件传输任务 {task_id}: {source_path:?} -> {target_path:?}"
+        );
+
+        // 这里应该创建实际的传输任务
+        Ok(())
+    }
+
+    /// 获取文件传输任务状态
+    ///
+    /// # 参数
+    ///
+    /// * `task_id` - 任务 ID
+    ///
+    /// # 返回值
+    ///
+    /// 传输任务状态
+    pub async fn get_transfer_status(
+        &self,
+        task_id: &str,
+    ) -> anyhow::Result<crate::tauri_api::FileTransferTask> {
+        use chrono::Utc;
+
+        // 这里应该从实际存储中获取任务状态
+        // 目前返回示例数据
+        let task = crate::tauri_api::FileTransferTask {
+            id: task_id.to_string(),
+            source_path: std::path::PathBuf::from("/tmp/source.txt"),
+            target_path: std::path::PathBuf::from("/tmp/target.txt"),
+            status: crate::tauri_api::TransferStatus::Pending,
+            transferred_bytes: 0,
+            total_bytes: 1024,
+            transfer_speed: 0,
+            start_time: Utc::now(),
+            estimated_completion: None,
+        };
+
+        Ok(task)
+    }
+
+    /// 取消文件传输任务
+    ///
+    /// # 参数
+    ///
+    /// * `task_id` - 任务 ID
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn cancel_transfer(&self, task_id: &str) -> anyhow::Result<()> {
+        log::info!("取消文件传输任务 {task_id}");
+
+        // 这里应该取消实际的传输任务
+        Ok(())
+    }
+
+    /// 健康检查
+    ///
+    /// # 返回值
+    ///
+    /// 健康状态
+    pub async fn health_check(&self) -> Option<bool> {
+        // 简单的健康检查：检查本地地址是否有效
+        Some(!self.local_addr.ip().is_unspecified())
     }
 }
 
@@ -618,10 +842,10 @@ mod tests {
             .any(|addr| addr == &SocketAddr::from(([255, 255, 255, 255], 55555)))
         {
             // 如果有全网广播地址，测试通过
-            assert!(true);
+            // 不需要assert!(true)
         } else {
             // 否则应该有其他有效的广播地址
-            assert!(addresses.len() > 0, "应该生成至少一个广播地址");
+            assert!(!addresses.is_empty(), "应该生成至少一个广播地址");
         }
     }
 

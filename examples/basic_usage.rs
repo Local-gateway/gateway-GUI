@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(async move {
         if let Err(e) = gateway_for_task.run().await {
-            eprintln!("网关运行错误: {}", e);
+            eprintln!("网关运行错误: {e}");
         }
     });
 
@@ -47,8 +47,7 @@ async fn main() -> anyhow::Result<()> {
     for i in 1..=10 {
         let (registry_size, active_connections) = gateway_clone.get_stats().await;
         info!(
-            "第 {} 次检查 - 注册表大小: {}, 活跃连接: {}",
-            i, registry_size, active_connections
+            "第 {i} 次检查 - 注册表大小: {registry_size}, 活跃连接: {active_connections}"
         );
 
         let local_entry = gateway_clone.get_local_entry().await;

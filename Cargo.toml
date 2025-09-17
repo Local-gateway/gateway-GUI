@@ -1,6 +1,6 @@
 [package]
 name = "wdic-gateway"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "基于 QUIC + UDP 双协议的本地网关实现，提供 P2P 网络发现、目录挂载、文件传输和智能搜索功能"
 authors = ["Local Gateway Team"]
@@ -21,6 +21,7 @@ env_logger = "0.11.8"
 fs_extra = "1.3.0"
 if-addrs = "0.14.0"
 log = "0.4.28"
+once_cell = "1.20.2"
 quiche = { version = "0.24.6", default-features = false, features = ["boringssl-vendored"] }
 serde = { version = "1.0.221", features = ["derive"] }
 serde_json = "1.0.144"
@@ -37,6 +38,8 @@ rand = "0.9.2"
 crossbeam = "0.8.4"
 atomic_refcell = "0.1.13"
 dashmap = "6.1.0"
+tauri = "2.8.5"
+tauri-plugin-shell = "2.3.1"
 
 # Use boringssl-vendored for all platforms to avoid OpenSSL dependency issues
 # The vendored version builds BoringSSL from source and is more portable
@@ -46,3 +49,6 @@ criterion = "0.7.0"
 serial_test = "3.2.0"
 tempfile = "3.22.0"
 tokio-test = "0.4.4"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }

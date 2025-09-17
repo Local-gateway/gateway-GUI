@@ -45,17 +45,17 @@ async fn main() -> anyhow::Result<()> {
 
             // 获取挂载的目录列表
             let mounted = gateway.get_mounted_directories().await;
-            info!("当前挂载的目录: {:?}", mounted);
+            info!("当前挂载的目录: {mounted:?}");
 
             // 本地文件搜索演示
             let search_results = gateway.search_files_locally(&["rs".to_string()]).await;
             info!("本地搜索 'rs' 文件结果: {} 个文件", search_results.len());
             for file in search_results.iter().take(3) {
-                info!("  - {}", file);
+                info!("  - {file}");
             }
         }
         Err(e) => {
-            info!("目录挂载失败（正常，用于演示）: {}", e);
+            info!("目录挂载失败（正常，用于演示）: {e}");
         }
     }
 
@@ -64,26 +64,26 @@ async fn main() -> anyhow::Result<()> {
     let broadcast_result = gateway
         .broadcast_info_message("这是一条来自 UDP 演示网关的测试消息！".to_string())
         .await?;
-    info!("信息广播发送到 {} 个地址", broadcast_result);
+    info!("信息广播发送到 {broadcast_result} 个地址");
 
     // 演示目录搜索广播
     info!("=== 目录搜索广播演示 ===");
     let search_broadcast_result = gateway
         .broadcast_directory_search(vec!["rs".to_string(), "toml".to_string()])
         .await?;
-    info!("目录搜索广播发送到 {} 个地址", search_broadcast_result);
+    info!("目录搜索广播发送到 {search_broadcast_result} 个地址");
 
     // 演示性能测试功能
     info!("=== 性能测试演示 ===");
     let latency_1k = gateway
         .run_performance_test("latency_test".to_string(), 1024)
         .await?;
-    info!("1KB 数据延迟测试结果: {} 毫秒", latency_1k);
+    info!("1KB 数据延迟测试结果: {latency_1k} 毫秒");
 
     let latency_10k = gateway
         .run_performance_test("throughput_test".to_string(), 10240)
         .await?;
-    info!("10KB 数据延迟测试结果: {} 毫秒", latency_10k);
+    info!("10KB 数据延迟测试结果: {latency_10k} 毫秒");
 
     // 演示定向令牌发送（发送到本地地址用于演示）
     info!("=== 定向令牌发送演示 ===");
@@ -95,8 +95,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match gateway.send_token_to(custom_token, target_addr).await {
-        Ok(()) => info!("成功发送定向令牌到 {}", target_addr),
-        Err(e) => info!("定向令牌发送失败（正常，没有监听者）: {}", e),
+        Ok(()) => info!("成功发送定向令牌到 {target_addr}"),
+        Err(e) => info!("定向令牌发送失败（正常，没有监听者）: {e}"),
     }
 
     // 演示多种令牌类型的创建
@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
         file_path: "/path/to/file.txt".to_string(),
         request_id: Uuid::new_v4(),
     };
-    info!("创建文件请求令牌: {:?}", file_request);
+    info!("创建文件请求令牌: {file_request:?}");
 
     // 性能测试令牌
     let perf_test = UdpToken::PerformanceTest {
@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
         data_size: 4096,
         start_time: chrono::Utc::now(),
     };
-    info!("创建性能测试令牌: {:?}", perf_test);
+    info!("创建性能测试令牌: {perf_test:?}");
 
     // 等待一段时间以便观察日志
     info!("等待 3 秒以便观察网络活动...");
@@ -133,8 +133,7 @@ async fn main() -> anyhow::Result<()> {
     // 显示最终统计信息
     let (registry_size, active_connections) = gateway.get_stats().await;
     info!(
-        "最终统计 - 注册表大小: {}, 活跃连接: {}",
-        registry_size, active_connections
+        "最终统计 - 注册表大小: {registry_size}, 活跃连接: {active_connections}"
     );
 
     info!("UDP 广播协议演示完成！");

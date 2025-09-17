@@ -236,6 +236,171 @@ impl Registry {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    // ============================================================================
+    // 挂载点管理方法（为 Tauri API 添加）
+    // ============================================================================
+
+    /// 注册挂载点
+    ///
+    /// # 参数
+    ///
+    /// * `mount_id` - 挂载点 ID
+    /// * `local_path` - 本地路径
+    /// * `mount_name` - 挂载名称
+    /// * `read_only` - 是否只读
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn register_mount_point(
+        &self,
+        _mount_id: String,
+        local_path: std::path::PathBuf,
+        mount_name: String,
+        read_only: bool,
+    ) -> anyhow::Result<()> {
+        // 验证路径存在且是目录
+        if !local_path.exists() {
+            return Err(anyhow::anyhow!("路径不存在: {:?}", local_path));
+        }
+
+        if !local_path.is_dir() {
+            return Err(anyhow::anyhow!("不是目录: {:?}", local_path));
+        }
+
+        // 这里可以添加实际的挂载点注册逻辑
+        // 目前只是简单的验证
+        log::info!(
+            "注册挂载点: {mount_name} -> {local_path:?} (只读: {read_only})"
+        );
+
+        Ok(())
+    }
+
+    /// 取消注册挂载点
+    ///
+    /// # 参数
+    ///
+    /// * `mount_id` - 挂载点 ID
+    ///
+    /// # 返回值
+    ///
+    /// 操作结果
+    pub async fn unregister_mount_point(&self, mount_id: &str) -> anyhow::Result<()> {
+        // 这里可以添加实际的挂载点取消注册逻辑
+        log::info!("取消注册挂载点: {mount_id}");
+        Ok(())
+    }
+
+    /// 获取挂载点列表
+    ///
+    /// # 返回值
+    ///
+    /// 挂载点列表
+    pub async fn get_mount_points(&self) -> anyhow::Result<Vec<crate::tauri_api::MountPoint>> {
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        // 这里应该从实际存储中获取挂载点
+        // 目前返回示例数据
+        let mount_points = vec![
+            crate::tauri_api::MountPoint {
+                id: Uuid::new_v4().to_string(),
+                local_path: std::path::PathBuf::from("/tmp"),
+                mount_name: "临时目录".to_string(),
+                read_only: false,
+                mount_time: Utc::now(),
+                file_count: 0,
+                total_size: 0,
+            },
+        ];
+
+        Ok(mount_points)
+    }
+
+    /// 列出目录内容
+    ///
+    /// # 参数
+    ///
+    /// * `mount_id` - 挂载点 ID
+    /// * `path` - 目录路径
+    ///
+    /// # 返回值
+    ///
+    /// 目录条目列表
+    pub async fn list_directory(
+        &self,
+        _mount_id: &str,
+        path: &str,
+    ) -> anyhow::Result<Vec<crate::tauri_api::DirectoryEntry>> {
+        use std::fs;
+        use chrono::{DateTime, Utc};
+
+        // 这里应该根据 mount_id 找到实际的挂载点
+        // 目前简化实现
+        let target_path = std::path::PathBuf::from(path);
+
+        if !target_path.exists() {
+            return Err(anyhow::anyhow!("路径不存在: {:?}", target_path));
+        }
+
+        if !target_path.is_dir() {
+            return Err(anyhow::anyhow!("不是目录: {:?}", target_path));
+        }
+
+        let mut entries = Vec::new();
+        let read_dir = fs::read_dir(&target_path)?;
+
+        for entry in read_dir {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let full_path = entry.path();
+
+            let modified_time = metadata.modified()?
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+            let modified_time = DateTime::from_timestamp(modified_time as i64, 0)
+                .unwrap_or_else(Utc::now);
+
+            let created_time = metadata.created().ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|duration| DateTime::from_timestamp(duration.as_secs() as i64, 0));
+
+            entries.push(crate::tauri_api::DirectoryEntry {
+                name: file_name.clone(),
+                path: full_path.to_string_lossy().to_string(),
+                is_directory: metadata.is_dir(),
+                size: if metadata.is_file() { metadata.len() } else { 0 },
+                modified_time,
+                created_time,
+                file_type: if metadata.is_dir() {
+                    "directory".to_string()
+                } else if metadata.is_file() {
+                    // 简单的文件类型推断
+                    if let Some(extension) = full_path.extension() {
+                        extension.to_string_lossy().to_string()
+                    } else {
+                        "file".to_string()
+                    }
+                } else {
+                    "other".to_string()
+                },
+            });
+        }
+
+        // 按名称排序，目录在前
+        entries.sort_by(|a, b| {
+            match (a.is_directory, b.is_directory) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            }
+        });
+
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
